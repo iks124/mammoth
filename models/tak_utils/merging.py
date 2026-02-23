@@ -1,9 +1,10 @@
 import torch
 
 from typing import Dict, List
-from models.clip_ft_utils.ties_merging import ties_merging
+from models.tak_utils.ties_merging import ties_merging
 from tqdm.auto import tqdm
 
+from copy import deepcopy
 
 
 def add_merging_args(parser):
@@ -32,10 +33,10 @@ def get_merging_function(command_args, device):
 class AbstractMerging:
 
     def merge(self):
-        raise NotImplementedError
+        raise NotImplemented
 
     def add(self: Dict):
-        raise NotImplementedError
+        raise NotImplemented
     
     def set_alpha(self, alpha: float):
         self.alpha = alpha

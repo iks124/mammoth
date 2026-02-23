@@ -3,9 +3,9 @@ from torch import nn
 from tqdm import tqdm
 from torch.nn import functional as F
 
-from models.clip_ft_utils.hooks import hook_forward_store_inputs
+from models.tak_utils.hooks import hook_forward_store_inputs
 
-from models.clip_ft_utils.utils import set_requires_grad_to
+from models.tak_utils.utils import set_requires_grad_to
 
 
 def get_split(dataset):

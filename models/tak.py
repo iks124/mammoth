@@ -17,9 +17,6 @@ import open_clip # type: ignore
 
 from typing import Tuple, List
 
-import matplotlib.pyplot as plt
-plt.ioff()
-
 import torch
 from models.tak_utils.utils import add_clip_args
 from models.tak_utils.backbone import Backbone, create_clip
@@ -34,7 +31,7 @@ from models.tak_utils.eigenvals import compute_eigenvalues
 from models.tak_utils.merging import get_merging_function
 from models.tak_utils.merging import add_merging_args
 from models.tak_utils.utils import get_parameter
-from utils.training import evaluate as evaluate_all_tasks
+from utils.evaluate import evaluate 
 
 import wandb
 
@@ -710,7 +707,7 @@ class TAK(ContinualModel):
         for alpha in alphas:
             self.merging.set_alpha(alpha)
             self.merged_task_vector = self.merging.merge(self.delta_w_names)
-            accs, accs_mask_classes = evaluate_all_tasks(self, self.dataset)
+            accs, accs_mask_classes = evaluate(self, self.dataset)
             norm_mask_acc = [acc / safe_den(self.individual_mask_acc[t])
                               for t, acc in enumerate(accs_mask_classes)]
             print(f"Alpha: {alpha} - Acc: {sum(accs_mask_classes) / len(accs_mask_classes):.4f} - Norm Acc: {sum(norm_mask_acc) / len(norm_mask_acc):.4f}")

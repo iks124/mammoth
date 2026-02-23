@@ -16,7 +16,7 @@ except ImportError:
     raise ImportError("Please install the CLIP package by running: "
                       "pip install git+https://github.com/openai/CLIP.git")
 
-from models.clip_ft_utils.templates import get_templates
+from models.tak_utils.templates import get_templates
 
 
 def create_clip(name_clip_backbone, device) -> CLIP:

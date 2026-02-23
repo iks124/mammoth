@@ -23,12 +23,14 @@ dependencies = [
     "accelerate>=1.6.0",
     "bitsandbytes>=0.45.4",
     "clip",
+    "datasets>=4.5.0",
     "ftfy>=6.3.1",
     "googledrivedownloader==0.4",
     "gpustat>=1.1.1",
     "kornia>=0.7.0",
     "numpy>=2.2.4",
     "onedrivedownloader>=1.1.3",
+    "open-clip-torch>=2.32.0",
     "pandas>=2.2.3",
     "pillow>=11.1.0",
     "pyyaml>=6.0.2",
@@ -38,6 +40,7 @@ dependencies = [
     "torch>=2.1.0",
     "torchvision>=0.21.0",
     "tqdm>=4.67.1",
+    "wandb>=0.20.1",
 ]
 
 [project.urls]

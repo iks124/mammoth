@@ -2,16 +2,16 @@ import torch
 from torch import nn
 from tqdm import tqdm
 
-from models.clip_ft_utils.hooks import hook_forward_batch
-from models.clip_ft_utils.hooks import hook_forward_batch_nosequence
-from models.clip_ft_utils.hooks import hook_forward_store_inputs
+from models.tak_utils.hooks import hook_forward_batch
+from models.tak_utils.hooks import hook_forward_batch_nosequence
+from models.tak_utils.hooks import hook_forward_store_inputs
 
-from models.clip_ft_utils.hooks import hook_backward
-from models.clip_ft_utils.hooks import hook_backward_nosequence
-from models.clip_ft_utils.hooks import hook_backward_layer_norm
-from models.clip_ft_utils.hooks import hook_backward_cls_token
+from models.tak_utils.hooks import hook_backward
+from models.tak_utils.hooks import hook_backward_nosequence
+from models.tak_utils.hooks import hook_backward_layer_norm
+from models.tak_utils.hooks import hook_backward_cls_token
 
-from models.clip_ft_utils.utils import set_requires_grad_to
+from models.tak_utils.utils import set_requires_grad_to
 
 
 def get_split(dataset):

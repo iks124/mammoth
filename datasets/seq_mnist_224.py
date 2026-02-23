@@ -1,8 +1,3 @@
-# Copyright 2022-present, Lorenzo Bonicelli, Pietro Buzzega, Matteo Boschini, Angelo Porrello, Simone Calderara.
-# All rights reserved.
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 from typing import Tuple
 
 import torch
@@ -15,34 +10,26 @@ from datasets.utils.continual_dataset import (ContinualDataset, fix_class_names_
                                               store_masked_loaders)
 from utils.conf import base_path
 from datasets.utils import set_default_from_args
+from datasets.transforms.denormalization import DeNormalize
 
 
-class MyMNIST(MNIST):
+class MyMNIST224(MNIST):
     """
     Overrides the MNIST dataset to change the getitem function.
     """
 
     def __init__(self, root, train=True, transform=None,
                  target_transform=None, download=False) -> None:
-        self.not_aug_transform = transforms.ToTensor()
-        super(MyMNIST, self).__init__(root, train,
+        self.not_aug_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+        super().__init__(root, train,
                                       transform, target_transform, download)
 
     def __getitem__(self, index: int) -> Tuple[Image.Image, int, Image.Image]:
-        """
-        Gets the requested element from the dataset.
-
-        Args:
-            index: index of the element to be returned
-
-        Returns:
-            tuple: (image, target) where target is index of the target class.
-        """
         img, target = self.data[index], self.targets[index]
-
-        # doing this so that it is consistent with all other datasets
-        # to return a PIL Image
-        img = Image.fromarray(img.numpy(), mode='L')
+        img = Image.fromarray(img.numpy(), mode='L').convert("RGB")
         original_img = self.not_aug_transform(img.copy())
 
         if self.transform is not None:
@@ -57,43 +44,50 @@ class MyMNIST(MNIST):
         return img, target, original_img
 
 
-class SequentialMNIST(ContinualDataset):
-    """The Sequential MNIST dataset.
-
-    Args:
-        NAME (str): name of the dataset.
-        SETTING (str): setting of the dataset.
-        N_CLASSES_PER_TASK (int): number of classes per task.
-        N_TASKS (int): number of tasks.
-        N_CLASSES (int): number of classes.
-        SIZE (tuple): size of the images.
+class SequentialMNIST224(ContinualDataset):
+    """
+    Sequential MNIST dataset in 224x224 RGB for CLIP.
     """
 
-    NAME = 'seq-mnist'
+    NAME = 'seq-mnist-224'
     SETTING = 'class-il'
     N_CLASSES_PER_TASK = 2
     N_TASKS = 5
     N_CLASSES = N_CLASSES_PER_TASK * N_TASKS
-    SIZE = (28, 28)
-    TRANSFORM = None
+    SIZE = (224, 224)
+    MEAN = (0.48145466, 0.4578275, 0.40821073)  # CLIP mean
+    STD = (0.26862954, 0.26130258, 0.27577711)  # CLIP std
+
+    TRANSFORM = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize(MEAN, STD),
+    ])
+
+    TEST_TRANSFORM = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(MEAN, STD),
+    ])
 
     def get_data_loaders(self) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-        transform = transforms.ToTensor()
-        train_dataset = MyMNIST(base_path() + 'MNIST',
-                                train=True, download=True, transform=transform)
-        test_dataset = MNIST(base_path() + 'MNIST',
-                             train=False, download=True, transform=transform)
-
+        train_dataset = MyMNIST224(base_path() + 'MNIST',
+                                train=True, download=True, transform=self.TRANSFORM)
+        test_dataset = MyMNIST224(base_path() + 'MNIST',
+                               train=False, download=True, transform=self.TEST_TRANSFORM)
         train, test = store_masked_loaders(train_dataset, test_dataset, self)
         return train, test
 
     @set_default_from_args("backbone")
     def get_backbone():
-        return "mnistmlp"
+        return "vit"
 
     @staticmethod
     def get_transform():
-        return SequentialMNIST.TRANSFORM
+        return transforms.Compose(
+            [transforms.ToPILImage(), SequentialMNIST224.TRANSFORM])
 
     @staticmethod
     def get_loss():
@@ -101,25 +95,24 @@ class SequentialMNIST(ContinualDataset):
 
     @staticmethod
     def get_normalization_transform():
-        return None
+        return transforms.Normalize(SequentialMNIST224.MEAN, SequentialMNIST224.STD)
 
     @staticmethod
     def get_denormalization_transform():
-        return None
+        return DeNormalize(SequentialMNIST224.MEAN, SequentialMNIST224.STD)
 
     @set_default_from_args('batch_size')
     def get_batch_size():
-        return 64
+        return 128
 
     @set_default_from_args('n_epochs')
     def get_epochs():
-        return 1
+        return 20
 
     def get_class_names(self):
         if self.class_names is not None:
             return self.class_names
-        classes = MNIST(base_path() + 'MNIST', train=True, download=True).classes
-        classes = [c.split('-')[1].strip() for c in classes]
+        classes = [str(i) for i in range(10)]
         classes = fix_class_names_order(classes, self.args)
         self.class_names = classes
         return self.class_names

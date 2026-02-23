@@ -1,14 +1,16 @@
 from numpy import double
+from regex import D
+from sympy import numer
 import torch
 from torch import nn
 from tqdm import tqdm
 import math
 
-from models.clip_ft_utils.hooks import hook_forward_store_inputs
-from models.clip_ft_utils.fisher_kfac import KFACComputer
+from models.tak_utils.hooks import hook_forward_store_inputs
+from models.tak_utils.fisher_kfac import KFACComputer
 
-from models.clip_ft_utils.utils import FisherLoader
-from models.clip_ft_utils.utils import set_requires_grad_to
+from models.tak_utils.utils import FisherLoader
+from models.tak_utils.utils import set_requires_grad_to
 
 
 def get_split(dataset):
@@ -353,7 +355,7 @@ class EKFAC_Universe_Computer(nn.Module):
                 UA, UG, _, _, _ = self.fisher_kfac_universe_loader.load_ekfac(0)
                 self.UA_universe = UA
                 self.UG_universe = UG
-            except Exception:
+            except:
                 self.universe_base_compute()
 
         self.current_task += 1
@@ -475,7 +477,7 @@ class EKFAC_Difference_Computer(EKFAC_Universe_Computer):
         try:
             self.UA_universe, self.UG_universe, self.D_universe, self.ffT_universe, self.num_of_examples_universe = \
                     self.fisher_kfac_universe_loader.load_ekfac(0)
-        except Exception:
+        except:
                 print("Universe EKFAC not found in cache, will be computed from scratch when needed.")
                 print("This will take a while...")
                 print("Consider precomputing and caching the universe EKFAC to speed up training.")
