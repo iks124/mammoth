@@ -28,7 +28,7 @@ class Sequential8Vision(ContinualDataset):
     """
     NAME = 'seq-8vision'
     SETTING = 'class-il'
-    DATASET_NAMES = ["cars196", "dtd", "eurosat-rgb", "gtsrb", "mnist-224", "resisc45", "sun397", "svhn"]
+    DATASET_NAMES = ["seq-cars196", "seq-dtd", "seq-eurosat-rgb", "seq-gtsrb", "seq-mnist-224", "seq-resisc45", "seq-sun397", "seq-svhn"]
     DATASETS = [SequentialCars196, SequentialDTD, SequentialEuroSatRgb, SequentialGTSRB, SequentialMNIST224, SequentialResisc45, SequentialSUN397, SequentialSVHN]
     N_CLASSES_PER_TASK = [196, 47, 10, 43, 10, 45, 397, 10]
     N_TASKS = 8
@@ -97,14 +97,14 @@ class Sequential8Vision(ContinualDataset):
 
     def get_task_epochs(self, t):
         epochs = {
-            "joint-cars196": 35,
-            "joint-dtd": 76,
-            "joint-eurosat-rgb": 12,
-            "joint-gtsrb": 11,
-            "joint-mnist-224": 5,
-            "joint-resisc45": 15,
-            "joint-sun397": 14,
-            "joint-svhn": 4,
+            "seq-cars196": 35,
+            "seq-dtd": 76,
+            "seq-eurosat-rgb": 12,
+            "seq-gtsrb": 11,
+            "seq-mnist-224": 5,
+            "seq-resisc45": 15,
+            "seq-sun397": 14,
+            "seq-svhn": 4,
         }
         return epochs[self.DATASET_NAMES[t]]
     

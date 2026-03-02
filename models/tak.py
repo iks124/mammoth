@@ -211,7 +211,7 @@ class TAK(ContinualModel):
         dataset.test_loaders[-1].dataset.transform = self.clip_eval_transform
         dataset.train_loader.dataset.transform = self.clip_transform # type: ignore
 
-        self.cur_offset = self.compute_offsets(self.current_task)
+        self.cur_offset = self.get_offsets(self.current_task)
 
         if isinstance(dataset.N_CLASSES_PER_TASK, int):
             self.cpt = dataset.N_CLASSES_PER_TASK
@@ -285,10 +285,10 @@ class TAK(ContinualModel):
 
                 if self.args.fisher_use_head:
                     head = build_classification_head(self.clip_model, dataset,
-                                                    self.compute_offsets(self.num_total_tasks-1), eval=True)
+                                                    self.get_offsets(self.num_total_tasks-1), eval=True)
                 elif self.args.fisher_use_softmax:
                     head = build_classification_head(self.clip_model, dataset,
-                                                    self.compute_offsets(self.num_total_tasks - 1), eval=True)
+                                                    self.get_offsets(self.num_total_tasks - 1), eval=True)
                     extended_head = nn.Sequential(
                         head,
                         nn.Softmax(dim=1)
