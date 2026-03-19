@@ -1,3 +1,7 @@
+import os
+import sys
+sys.path.insert(0, os.getcwd())
+
 from utils import globals
 from models import get_model_names, register_model, ContinualModel
 from datasets import get_dataset_names, register_dataset
