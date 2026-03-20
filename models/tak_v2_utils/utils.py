@@ -106,15 +106,15 @@ class OptimizerBuilder:
         if self.args.scheduler_ntk == "none":
             pass
         elif self.args.scheduler_ntk == "cosine":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             sched = cosine_lr(
                 opt, self.args.lr, 500 / reduction_factor, num_total_steps, 0
             )
         elif self.args.scheduler_ntk == "cosine_talos":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             sched = cosine_lr(opt, self.args.lr, 200, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_plus":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             warmup_steps = int(0.1 * num_total_steps)
             sched = cosine_lr(
                 opt, self.args.lr, warmup_steps, num_total_steps, 0.1 * self.args.lr
@@ -122,7 +122,7 @@ class OptimizerBuilder:
         elif self.args.scheduler_ntk == "decay":
             sched = cosine_lr(opt, self.args.lr, 0, self.args.n_epochs * num_batches, 0)
         elif self.args.scheduler_ntk == "step":
-            num_steps = self.args.n_epochs * num_batches // self.args.chunks
+            num_steps = self.args.n_epochs * num_batches // self.args.virtual_bs_n
             warmup_steps = int(0.1 * num_steps)
 
             sched = step_lr_decay(opt, self.args.lr, warmup_steps, num_steps)
@@ -169,20 +169,20 @@ class OptimizerBuilder:
         if self.args.scheduler_ntk == "none":
             pass
         elif self.args.scheduler_ntk == "cosine":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             sched = cosine_lr(opt, base_lrs, 500, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_talos":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             sched = cosine_lr(opt, base_lrs, 200, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_plus":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.chunks)
+            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
             warmup_steps = int(0.1 * num_total_steps)
             min_lrs = [0.1 * lr for lr in base_lrs]
             sched = cosine_lr(opt, base_lrs, warmup_steps, num_total_steps, min_lrs)
         elif self.args.scheduler_ntk == "decay":
             sched = cosine_lr(opt, base_lrs, 0, self.args.n_epochs * num_batches, 0)
         elif self.args.scheduler_ntk == "step":
-            num_steps = self.args.n_epochs * num_batches // self.args.chunks
+            num_steps = self.args.n_epochs * num_batches // self.args.virtual_bs_n
             warmup_steps = int(0.1 * num_steps)
 
             sched = step_lr_decay(opt, base_lrs, warmup_steps, num_steps)
