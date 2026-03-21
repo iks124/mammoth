@@ -122,6 +122,11 @@ class TAKv2(ContinualModel):
         if self.args.alpha_merging == 'one':
             if self.args.merging in ("ta", "dare", "ties"):
                 self.args.alpha_merging = self.dataset.N_TASKS
+        else:
+            try:
+                self.args.alpha_merging = float(self.args.alpha_merging)
+            except ValueError:
+                raise ValueError("alpha_merging must be 'one' or a float value")
     
     def __init__(self, backbone, loss, args, transform, dataset):
         assert dataset is not None
