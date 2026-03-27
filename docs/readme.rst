@@ -20,7 +20,7 @@ With Mammoth, nothing is set in stone. You can easily add new models, datasets, 
 
 **BIASED AND NOISY DATASETS** We have introduced datasets with *biased* and *noisy* labels. Noisy labels are generated on the fly and are available for all single-label multi-class datasets (the majority, only `seq_celeba` is currently multi-label). 
 
-**REPRODUCIBILITY** We are working on making all the configurations to reproduce the results of the models available in the repository. Many models already have their configurations available in the ``models/configs/`` folder and can be loaded with the ``--model_config`` argument set to `best`. You can see all the models with configurations available in the `REPRODUCIBILITY.md` file.
+**REPRODUCIBILITY** We are working on making all the configurations to reproduce the results of the models available in the repository. Many models already have their configurations available in the ``models/config/`` folder and can be loaded with the ``--model_config`` argument set to `best`. You can see all the models with configurations available in the `REPRODUCIBILITY.md` file.
 
 **DATASET CONFIGURATIONS** We now support *configuration files* for the datasets with the new ``--dataset_config`` argument. This allows for more flexibility in the dataset definition. See more in :ref:`dataset-configurations`.
 
@@ -69,7 +69,7 @@ Setup
 -----
 
 - Install with ``pip install -r requirements.txt``.
-- Use ``./utils/main.py`` to run experiments.
+- Use ``python main.py`` to run experiments.
 - New models can be added to the ``models/`` folder.
 - New datasets can be added to the ``datasets/`` folder.
 

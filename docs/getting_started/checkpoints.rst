@@ -7,7 +7,7 @@ For example, to save a checkpoint after the end of the last task, simply run the
 
 .. code-block:: python 
     
-        python utils/main.py --savecheck=last --model=sgd --dataset=seq-cifar10 --lr=0.1
+        python main.py --savecheck=last --model=sgd --dataset=seq-cifar10 --lr=0.1
 
 The available options for ``--savecheck`` are:
 
@@ -21,7 +21,7 @@ The available options for ``--savecheck`` are:
 This will save the checkpoint in the ``checkpoints`` folder. To load the checkpoint, simply run the following command:
 .. code-block:: python 
     
-        python utils/main.py --loadcheck=<path to checkpoint>.pt --model=sgd --dataset=seq-cifar10 --lr=0.1
+        python main.py --loadcheck=<path to checkpoint>.pt --model=sgd --dataset=seq-cifar10 --lr=0.1
 
 .. rubric:: Checkpoint save format
 

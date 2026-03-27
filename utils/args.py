@@ -223,7 +223,7 @@ def add_configuration_args(parser: ArgumentParser, args: Namespace) -> None:
     config_group.add_argument('--dataset_config', type=str,
                               choices=get_dataset_config_names(args.dataset),
                               help='The configuration used for this dataset (e.g., number of tasks, transforms, backbone architecture, etc.).'
-                              'The available configurations are defined in the `datasets/config/<dataset>` folder.')
+                              'The available configurations are defined in the `datasets/configs/<dataset>` folder.')
 
     config_group.add_argument('--model_config', type=field_with_aliases({'default': ['base', 'default'], 'best': ['best']}), default='default',
                               help='The configuration used for this model. The available configurations are defined in the `models/config/<model>.yaml` file '
@@ -575,7 +575,7 @@ if __name__ == '__main__':
     add_initial_args(parser)
     parser.add_argument('--dataset_config', type=str,
                         help='The configuration used for this dataset (e.g., number of tasks, transforms, backbone architecture, etc.).'
-                        'The available configurations are defined in the `datasets/config/<dataset>` folder.')
+                        'The available configurations are defined in the `datasets/configs/<dataset>` folder.')
     docs_args = []
     for action in parser._actions:
         if action.dest == 'help':

@@ -14,11 +14,11 @@ This module contains a collection of utility classes and functions that are used
 Running Mammoth
 ---------------
 
-To run the library, simply run the `utils/main.py` script. There are a few command line arguments that can be used to customize the execution of the library. To see the full list of arguments, run the following command:
+To run the library, simply run the `main.py` script from the repository root. There are a few command line arguments that can be used to customize the execution of the library. To see the full list of arguments, run the following command:
 
 .. code-block:: bash
 
-  python utils/main.py --help
+  python main.py --help
 
 
 The most important arguments are the following:
@@ -35,7 +35,7 @@ Other arguments such as the size of the training batch and the number of epochs 
 
 .. code-block:: bash
 
-  python utils/main.py --dataset seq-cifar10 --model der --buffer_size 500 --lr 0.03 --batch_size 128 --n_epochs 10
+  python main.py --dataset seq-cifar10 --model der --buffer_size 500 --lr 0.03 --batch_size 128 --n_epochs 10
 
 .. note::
     To ease hyper-parameter tuning, all boolean arguments follow the convention: ``--<argument>=1`` for ``True`` and ``--<argument>=0`` for ``False``.
@@ -49,7 +49,7 @@ For example, to run the `er` model on the `seq-cifar10` dataset with a seed of `
 
 .. code-block:: bash
 
-  python utils/main.py --dataset seq-cifar10 --model der --buffer_size 500 --lr 0.03 --seed 42
+  python main.py --dataset seq-cifar10 --model der --buffer_size 500 --lr 0.03 --seed 42
 
 Setting the seed affects:
 

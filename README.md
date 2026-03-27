@@ -55,7 +55,7 @@ With Mammoth, nothing is set in stone. You can easily add new models, datasets, 
 
 - 📥 Install with `pip install -r requirements.txt` or run it directly with `uv run python main.py ...`
   > **Note**: PyTorch version >= 2.1.0 is required for scaled_dot_product_attention. If you cannot support this requirement, uncomment the lines 136-139 under `scaled_dot_product_attention` in `backbone/vit.py`.
-- 🚀 Use `main.py` or `./utils/main.py` to run experiments.
+- 🚀 Use `main.py` to run experiments.
 - 🧩 New models can be added to the `models/` folder.
 - 📊 New datasets can be added to the `datasets/` folder.
 
@@ -73,7 +73,7 @@ To run the model with the best hyperparameters, use the `--model_config=best` ar
 python main.py --model derpp --dataset seq-cifar100 --model_config best
 ```
 
- > NOTE: the `--model_config` argument will look for a file `<model_name>.yaml` in the `models/configs/` folder. This file should contain the hyperparameters for the best configuration of the model. You can find more information in [the documentation](https://aimagelab.github.io/mammoth/models/model_arguments.html#model-configurations-and-best-arguments).
+ > NOTE: the `--model_config` argument will look for a file `<model_name>.yaml` in the `models/config/` folder. This file should contain the hyperparameters for the best configuration of the model. You can find more information in [the documentation](https://aimagelab.github.io/mammoth/models/model_arguments.html#model-configurations-and-best-arguments).
 
 ### Build a new model
 

@@ -12,13 +12,6 @@ From the project root, you can run:
 
     python main.py --model <model_name> --dataset <dataset_name> [options]
 
-or equivalently:
-
-.. code-block:: bash
-
-    python utils/main.py --model <model_name> --dataset <dataset_name> [options]
-    # The `utils/main.py` is here to stay for backward compatibility.
-
 You can list all available arguments by running:
 
 .. code-block:: bash
