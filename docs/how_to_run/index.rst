@@ -62,6 +62,8 @@ Common Options
 
 For more details on arguments, see :ref:`module-utils`.
 
+For remote checkpoint loading (including Hugging Face URLs), TAKv2 Fisher cache loading from remote sources, and artifact upload to Hugging Face, see :doc:`getting_started/checkpoints`.
+
 Examples
 ~~~~~~~~
 

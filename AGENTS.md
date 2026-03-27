@@ -343,11 +343,18 @@ Docs-only changes:
 - Non-GCL datasets are expected to behave like `store_masked_loaders` outputs.
 - `backbone` typing alias still mentions `returnt='all'`; docs/models generally use `returnt='full'`. Keep backward compatibility if touching this interface.
 
+Remote checkpoint/cache nuances:
+
+- `--loadcheck` accepts local files and remote URLs (including Hugging Face resolve links).
+- `tak_v2` Fisher loading accepts local paths, HTTP(S) base URLs, and `hf://...` sources via `--fisher_cache` when `--load_fisher=1`.
+- If a remote URL returns a Git LFS pointer text file instead of artifact bytes, loading fails (use a direct raw/resolve artifact URL).
+
 ## 13) Workflow expectations for agents
 
 - Read this file before editing.
 - Keep changes minimal and task-focused.
 - Avoid touching caches/artifacts (`data/`, `checkpoints/`, `docs/_build/`) unless task explicitly requires it.
+- For artifact sharing, prefer `scripts/upload_to_hf.py` over ad-hoc upload snippets.
 - For non-doc changes, run at least one focused test playbook plus a smoke run.
 - Suggested smoke run: `uv run python main.py --model sgd --dataset seq-cifar10 --lr 1e-3 --n_epochs 1 --batch_size 2 --non_verbose 1 --num_workers 0 --debug_mode 1`
 - Always report validation commands actually executed.

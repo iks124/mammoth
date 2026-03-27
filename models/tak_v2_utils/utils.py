@@ -3,7 +3,11 @@ from typing import Literal, overload
 import torch
 import math
 import os
+import hashlib
+import logging
 import warnings
+import urllib.request
+from urllib.parse import urljoin
 
 from utils import binary_to_boolean_type
 from models.utils.continual_model import ContinualModel
@@ -19,6 +23,7 @@ except ImportError:
     )
 
 import numpy as np
+from utils.conf import get_checkpoint_path
 
 
 def set_requires_grad_to(model, namevars, mode: bool):
@@ -106,15 +111,21 @@ class OptimizerBuilder:
         if self.args.scheduler_ntk == "none":
             pass
         elif self.args.scheduler_ntk == "cosine":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             sched = cosine_lr(
                 opt, self.args.lr, 500 / reduction_factor, num_total_steps, 0
             )
         elif self.args.scheduler_ntk == "cosine_talos":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             sched = cosine_lr(opt, self.args.lr, 200, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_plus":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             warmup_steps = int(0.1 * num_total_steps)
             sched = cosine_lr(
                 opt, self.args.lr, warmup_steps, num_total_steps, 0.1 * self.args.lr
@@ -169,13 +180,19 @@ class OptimizerBuilder:
         if self.args.scheduler_ntk == "none":
             pass
         elif self.args.scheduler_ntk == "cosine":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             sched = cosine_lr(opt, base_lrs, 500, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_talos":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             sched = cosine_lr(opt, base_lrs, 200, num_total_steps, 0)
         elif self.args.scheduler_ntk == "cosine_plus":
-            num_total_steps = self.args.n_epochs * (num_batches // self.args.virtual_bs_n)
+            num_total_steps = self.args.n_epochs * (
+                num_batches // self.args.virtual_bs_n
+            )
             warmup_steps = int(0.1 * num_total_steps)
             min_lrs = [0.1 * lr for lr in base_lrs]
             sched = cosine_lr(opt, base_lrs, warmup_steps, num_total_steps, min_lrs)
@@ -263,6 +280,103 @@ class FisherLoader:
         self.fp_precision = fp_precision
         self.postprocessing = None
 
+    def _is_hf_source(self) -> bool:
+        return isinstance(self.fisher_cache, str) and self.fisher_cache.startswith(
+            "hf://"
+        )
+
+    def _is_http_source(self) -> bool:
+        return isinstance(self.fisher_cache, str) and self.fisher_cache.startswith(
+            ("http://", "https://")
+        )
+
+    def _is_remote_source(self) -> bool:
+        return self._is_hf_source() or self._is_http_source()
+
+    def _remote_cache_dir(self) -> str:
+        src_hash = hashlib.sha256(self.fisher_cache.encode("utf-8")).hexdigest()[:16]
+        cache_dir = os.path.join(
+            get_checkpoint_path(), "fisher_remote_cache", self.dataset_name, src_hash
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    @staticmethod
+    def _assert_not_lfs_pointer(file_path: str) -> None:
+        with open(file_path, "rb") as f:
+            header = f.read(256)
+        if header.startswith(b"version https://git-lfs.github.com/spec/v1"):
+            raise ValueError(
+                f"Downloaded file `{file_path}` is a Git LFS pointer, not the binary artifact. "
+                "Use a direct/raw artifact URL (or Hugging Face resolve URL) instead of a pointer URL."
+            )
+
+    @staticmethod
+    def _parse_hf_source(spec: str) -> tuple[str, str, str]:
+        assert spec.startswith("hf://")
+        payload = spec[len("hf://") :]
+        if "@" in payload:
+            payload, revision = payload.rsplit("@", 1)
+        else:
+            revision = "main"
+
+        parts = payload.split("/")
+        if len(parts) < 2:
+            raise ValueError(
+                "Invalid HF source format. Use `hf://<owner>/<repo>/<optional/subpath>@<optional_revision>`"
+            )
+
+        repo_id = "/".join(parts[:2])
+        base_path = "/".join(parts[2:])
+        return repo_id, base_path, revision
+
+    def _download_http_file(self, remote_url: str, local_path: str) -> str:
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with (
+            urllib.request.urlopen(remote_url) as source,
+            open(local_path, "wb") as output,
+        ):
+            output.write(source.read())
+        self._assert_not_lfs_pointer(local_path)
+        return local_path
+
+    def _resolve_file(self, filename: str) -> str:
+        if not self._is_remote_source():
+            return os.path.join(self.fisher_cache, filename)
+
+        cache_dir = self._remote_cache_dir()
+        local_path = os.path.join(cache_dir, filename)
+        if os.path.exists(local_path):
+            return local_path
+
+        if self._is_hf_source():
+            try:
+                from huggingface_hub import hf_hub_download
+            except ImportError as e:
+                raise ImportError(
+                    "huggingface_hub is required for `hf://` Fisher cache sources. "
+                    "Install it with `pip install huggingface_hub`."
+                ) from e
+
+            repo_id, base_path, revision = self._parse_hf_source(self.fisher_cache)
+            hf_filename = f"{base_path}/{filename}" if base_path else filename
+            downloaded_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=hf_filename,
+                revision=revision,
+                repo_type="model",
+                cache_dir=cache_dir,
+            )
+            self._assert_not_lfs_pointer(downloaded_path)
+            logging.info(
+                f"Downloaded Fisher file from HF: {repo_id}/{hf_filename}@{revision}"
+            )
+            return downloaded_path
+
+        remote_url = urljoin(self.fisher_cache.rstrip("/") + "/", filename)
+        logging.info(f"Downloading Fisher file from URL: {remote_url}")
+        return self._download_http_file(remote_url, local_path)
+
     @overload
     def load_kfac(
         self, task_id: int, only_counts: Literal[True]
@@ -291,9 +405,9 @@ class FisherLoader:
         ]
         | tuple[int, int]
     ):
-        fisher_cache_path = f"{self.fisher_cache}/{self.dataset_name}_task_{task_id}.pt"
-        fisher_cache_path_num_aaT = fisher_cache_path.replace(".pt", "_num_aaT.pt")
-        fisher_cache_path_num_ggT = fisher_cache_path.replace(".pt", "_num_ggT.pt")
+        base_name = f"{self.dataset_name}_task_{task_id}"
+        fisher_cache_path_num_aaT = self._resolve_file(f"{base_name}_num_aaT.pt")
+        fisher_cache_path_num_ggT = self._resolve_file(f"{base_name}_num_ggT.pt")
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -311,11 +425,14 @@ class FisherLoader:
                 )
 
         if only_counts:
+            logging.info(
+                f"Loaded Fisher counts for task {task_id} from `{self.fisher_cache}`"
+            )
             return cur_num_ggT, cur_num_aaT
 
-        fisher_cache_path_aaT = fisher_cache_path.replace(".pt", "_aaT.pt")
-        fisher_cache_path_ggT = fisher_cache_path.replace(".pt", "_ggT.pt")
-        fisher_cache_path_ffT = fisher_cache_path.replace(".pt", "_ffT.pt")
+        fisher_cache_path_aaT = self._resolve_file(f"{base_name}_aaT.pt")
+        fisher_cache_path_ggT = self._resolve_file(f"{base_name}_ggT.pt")
+        fisher_cache_path_ffT = self._resolve_file(f"{base_name}_ffT.pt")
 
         assert os.path.exists(fisher_cache_path_aaT)
         assert os.path.exists(fisher_cache_path_ggT)
@@ -347,9 +464,17 @@ class FisherLoader:
             else:
                 raise NotImplementedError
 
+        logging.info(
+            f"Loaded Fisher tensors for task {task_id} from `{self.fisher_cache}`"
+        )
         return ggT, aaT, ffT, cur_num_ggT, cur_num_aaT
 
     def store_kfac(self, task_id, ggT, aaT, ffT, num_ggT, num_aaT):
+        if self._is_remote_source():
+            raise ValueError(
+                "Cannot store Fisher cache to remote sources. "
+                "Set `--fisher_cache` to a local directory when `--load_fisher=0`."
+            )
         os.makedirs(self.fisher_cache, exist_ok=True)
         fisher_cache_path = f"{self.fisher_cache}/{self.dataset_name}_task_{task_id}.pt"
         torch.save(ggT, fisher_cache_path.replace(".pt", "_ggT.pt"))

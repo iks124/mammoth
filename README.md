@@ -83,6 +83,22 @@ See the [documentation](https://aimagelab.github.io/mammoth/models/build_a_model
 
 See the [documentation](https://aimagelab.github.io/mammoth/datasets/build_a_dataset.html) for a detailed guide on how to create a new dataset.
 
+### Upload artifacts to Hugging Face
+
+Mammoth provides a generic uploader script for checkpoints, caches, and any other artifacts:
+
+```bash
+uv run python scripts/upload_to_hf.py --repo-id <user-or-org>/<repo> --local-dir /path/to/artifacts --pattern "**/*"
+```
+
+Useful options:
+
+- `--remote-dir <path/in/repo>`
+- `--repo-type model|dataset|space`
+- `--revision <branch-or-tag>`
+- `--exclude <glob>` (can be repeated)
+- `--dry-run`
+
 
 ## 🆕 New Features
 
