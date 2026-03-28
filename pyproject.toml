@@ -70,6 +70,9 @@ extra = [
     "matplotlib",
 ]
 
+[tool.uv]
+exclude-newer = "30 days"
+
 [tool.uv.sources]
 clip = { git = "https://github.com/openai/CLIP.git" }
 
