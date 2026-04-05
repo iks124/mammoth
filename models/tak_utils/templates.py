@@ -408,7 +408,5 @@ def get_templates(dataset_name):
         return get_templates(dataset_name.replace('Val', ''))
     if dataset_name == "seq-8vision":
         return [dataset_to_template[dset_name] for dset_name in Sequential8Vision.DATASET_NAMES]
-    if dataset_name == "seq-14vision":
-        return [dataset_to_template[dset_name] for dset_name in Sequential14Vision.DATASET_NAMES]
     assert dataset_name in dataset_to_template, f'Unsupported dataset: {dataset_name}'
     return dataset_to_template[dataset_name]

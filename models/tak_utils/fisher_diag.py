@@ -14,10 +14,10 @@ def get_split(dataset):
 
 @torch.no_grad()
 def hook_backward_diag(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
         inputs = module.inputs.float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
         inputs = module.inputs.double()
     else:
@@ -55,11 +55,11 @@ def hook_backward_diag(module, _, grad_output):
 
 @torch.no_grad()
 def hook_backward_layer_norm_diag(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
         inputs = module.inputs.float()
         normalized = F.layer_norm(inputs, module.normalized_shape).float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
         inputs = module.inputs.double()
         normalized = F.layer_norm(inputs, module.normalized_shape).double()
@@ -96,9 +96,9 @@ def hook_backward_layer_norm_diag(module, _, grad_output):
 
 @torch.no_grad()
 def hook_backward_cls_token_diag(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
     else:
         raise NotImplementedError
@@ -117,38 +117,38 @@ def register_hooks(name, module, forward=True, backward=True,
         assert forward_hooks_dict is not None
         if 'lin_proj' in name:
             module.forward_handle = module.register_forward_hook(
-                forward_hooks_dict['hook_forward_nosequence'])  # type: ignore
+                forward_hooks_dict['hook_forward_nosequence']) 
         elif isinstance(module, nn.Linear) or \
                 isinstance(module, nn.modules.linear.NonDynamicallyQuantizableLinear):
-            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward'])  # type: ignore
+            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward']) 
         elif isinstance(module, nn.LayerNorm):
             module.forward_handle = module.register_forward_hook(
-                forward_hooks_dict['hook_forward_layer_norm'])  # type: ignore
+                forward_hooks_dict['hook_forward_layer_norm']) 
         elif 'cls_token' in name:
             module.forward_handle = module.register_forward_hook(
-                forward_hooks_dict['hook_forward_layer_norm'])  # type: ignore
+                forward_hooks_dict['hook_forward_layer_norm']) 
 
     if backward:
         assert bacward_hooks_dict is not None
         if 'lin_proj' in name:
             module.backward_handle = module.register_full_backward_hook(
-                bacward_hooks_dict['hook_backward_nosequence'])  # type: ignore
+                bacward_hooks_dict['hook_backward_nosequence']) 
         elif isinstance(module, nn.Linear) or \
                 isinstance(module, nn.modules.linear.NonDynamicallyQuantizableLinear):
             module.backward_handle = module.register_full_backward_hook(
-                bacward_hooks_dict['hook_backward'])  # type: ignore
+                bacward_hooks_dict['hook_backward']) 
         elif isinstance(module, nn.LayerNorm):
             module.backward_handle = module.register_full_backward_hook(
-                bacward_hooks_dict['hook_backward_layer_norm'])  # type: ignore
+                bacward_hooks_dict['hook_backward_layer_norm']) 
         elif 'cls_token' in name:
             module.backward_handle = module.register_full_backward_hook(
-                bacward_hooks_dict['hook_backward_cls_token'])  # type: ignore
+                bacward_hooks_dict['hook_backward_cls_token']) 
 
 
 class DiagComputer(nn.Module):
 
     def __init__(self, device: torch.device, debug_mode,
-                 train_percent: float = 1.0, num_samples_expectation: int = 0, precision: str = 'fp64'):
+                 train_percent: float = 1.0, num_samples_expectation: int = 0, fp_precision: str = 'fp64'):
 
         super().__init__()
 
@@ -158,7 +158,7 @@ class DiagComputer(nn.Module):
         self.debug_mode = debug_mode
         self.train_percent = train_percent
         self.num_samples_expectation = num_samples_expectation
-        self.precision = precision
+        self.fp_precision = fp_precision
 
     def to_be_fishered(self, name, module, all_param_finetuned):
         if not isinstance(module, nn.Linear) \
@@ -218,7 +218,7 @@ class DiagComputer(nn.Module):
         }
 
         for name, module in net.visual_encoder.named_modules():
-            module.precision = self.precision
+            module.fp_precision = self.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 module.compute_bias = True if f"{name}.bias" in all_param_finetuned else False
                 register_hooks(name, module, forward=True, backward=True,
@@ -284,7 +284,7 @@ class DiagComputer(nn.Module):
 
         # remove hooks
         for name, module in net.visual_encoder.named_modules():
-            del module.precision
+            del module.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 del module.compute_bias
                 module.forward_handle.remove()
@@ -317,8 +317,8 @@ class DiagComputer(nn.Module):
 class LossDiagComputer(DiagComputer):
 
     def __init__(self, device: torch.device, debug_mode,
-                 train_percent: float = 1.0, precision: str = 'fp64'):
-        super().__init__(device, debug_mode, train_percent, precision=precision)
+                 train_percent: float = 1.0, fp_precision: str = 'fp64'):
+        super().__init__(device, debug_mode, train_percent, fp_precision=fp_precision)
 
     def compute(self, net, head, delta_w_names, dataset, use_head=False):
 
@@ -360,7 +360,7 @@ class LossDiagComputer(DiagComputer):
         }
 
         for name, module in net.visual_encoder.named_modules():
-            module.precision = self.precision
+            module.fp_precision = self.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 module.compute_bias = True if f"{name}.bias" in all_param_finetuned else False
                 register_hooks(name, module, forward=True, backward=True,
@@ -426,7 +426,7 @@ class LossDiagComputer(DiagComputer):
 
         # remove hooks
         for name, module in net.visual_encoder.named_modules():
-            del module.precision
+            del module.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 del module.compute_bias
                 module.forward_handle.remove()
@@ -459,8 +459,8 @@ class LossDiagComputer(DiagComputer):
 class LossDiagComputerSampling(DiagComputer):
 
     def __init__(self, device: torch.device, debug_mode,
-                 train_percent: float = 1.0, precision: str = 'fp64'):
-        super().__init__(device, debug_mode, train_percent, precision=precision)
+                 train_percent: float = 1.0, fp_precision: str = 'fp64'):
+        super().__init__(device, debug_mode, train_percent, fp_precision=fp_precision)
 
     def compute(self, net, head, delta_w_names, dataset, use_head=False):
 
@@ -502,7 +502,7 @@ class LossDiagComputerSampling(DiagComputer):
         }
 
         for name, module in net.visual_encoder.named_modules():
-            module.precision = self.precision
+            module.fp_precision = self.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 module.compute_bias = True if f"{name}.bias" in all_param_finetuned else False
                 register_hooks(name, module, forward=True, backward=True,
@@ -568,7 +568,7 @@ class LossDiagComputerSampling(DiagComputer):
 
         # remove hooks
         for name, module in net.visual_encoder.named_modules():
-            del module.precision
+            del module.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 del module.compute_bias
                 module.forward_handle.remove()

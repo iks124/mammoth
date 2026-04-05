@@ -75,10 +75,10 @@ These backbones can be loaded using the ``--loadcheck`` argument, by supplying t
         The recommended way to load remote checkpoints is still ``--loadcheck=<url>``.
 
 
-TAKv2 Fisher cache from local/remote storage
+TAK Fisher cache from local/remote storage
 --------------------------------------------
 
-The ``tak_v2`` model supports loading Fisher cache tensors through ``--load_fisher=1`` and ``--fisher_cache``.
+The ``tak`` model supports loading Fisher cache tensors through ``--load_fisher=1`` and ``--fisher_cache``.
 
 ``--fisher_cache`` accepts:
 
@@ -90,15 +90,15 @@ Examples:
 
 .. code-block:: bash
 
-        python main.py --model tak_v2 --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache /path/to/fisher_cache --lr 1e-3 --n_epochs 1
+        python main.py --model tak --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache /path/to/fisher_cache --lr 1e-3 --n_epochs 1
 
 .. code-block:: bash
 
-        python main.py --model tak_v2 --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache https://my-host/path/to/fisher_cache --lr 1e-3 --n_epochs 1
+        python main.py --model tak --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache https://my-host/path/to/fisher_cache --lr 1e-3 --n_epochs 1
 
 .. code-block:: bash
 
-        python main.py --model tak_v2 --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache hf://my-user/my-repo/takv2/fisher@main --lr 1e-3 --n_epochs 1
+        python main.py --model tak --dataset seq-cifar100-224 --load_fisher 1 --fisher_cache hf://my-user/my-repo/tak/fisher@main --lr 1e-3 --n_epochs 1
 
 Expected file naming in the cache source:
 

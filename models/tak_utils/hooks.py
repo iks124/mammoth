@@ -8,9 +8,9 @@ def hook_forward_batch_nosequence(module, inputs, _):
         return torch.cat((x, torch.ones_like(torch.sum(x, -1, keepdim=True))), -1)
 
     with torch.no_grad():
-        if module.precision == 'fp32':
+        if module.fp_precision == 'fp32':
             x = inputs[0].detach().float()
-        elif module.precision == 'fp64':
+        elif module.fp_precision == 'fp64':
             x = inputs[0].detach().double()
         else:
             raise NotImplementedError
@@ -32,9 +32,9 @@ def hook_forward_batch(module, inputs, _):
         return torch.cat((x, torch.ones_like(torch.sum(x, -1, keepdim=True))), -1)
 
     with torch.no_grad():
-        if module.precision == 'fp32':
+        if module.fp_precision == 'fp32':
             x = inputs[0].detach().float()
-        elif module.precision == 'fp64':
+        elif module.fp_precision == 'fp64':
             x = inputs[0].detach().double()
         else:
             raise NotImplementedError
@@ -68,9 +68,9 @@ def hook_forward_layer_norm_batch(module, inputs, _):
         return torch.cat((x, torch.ones_like(torch.sum(x, -1, keepdim=True))), -1)
 
     with torch.no_grad():
-        if module.precision == 'fp32':
+        if module.fp_precision == 'fp32':
             x = inputs[0].detach().float()
-        elif module.precision == 'fp64':
+        elif module.fp_precision == 'fp64':
             x = inputs[0].detach().double()
         else:
             raise NotImplementedError
@@ -102,9 +102,9 @@ def hook_forward_layer_norm_batch(module, inputs, _):
 
 @torch.no_grad()
 def hook_backward_nosequence(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
     else:
         raise NotImplementedError
@@ -126,9 +126,9 @@ def hook_backward_nosequence(module, _, grad_output):
 
 @torch.no_grad()
 def hook_backward(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
     else:
         raise NotImplementedError
@@ -159,9 +159,9 @@ def hook_forward_store_inputs(module, inputs, _):
 
 @torch.no_grad()
 def hook_backward_cls_token(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
     else:
         raise NotImplementedError
@@ -184,11 +184,11 @@ def hook_backward_cls_token(module, _, grad_output):
 
 @torch.no_grad()
 def hook_backward_layer_norm(module, _, grad_output):
-    if module.precision == 'fp32':
+    if module.fp_precision == 'fp32':
         grad_out = grad_output[0].float()
         inputs = module.inputs.float()
         normalized = F.layer_norm(inputs, module.normalized_shape).float()
-    elif module.precision == 'fp64':
+    elif module.fp_precision == 'fp64':
         grad_out = grad_output[0].double()
         inputs = module.inputs.double()
         normalized = F.layer_norm(inputs, module.normalized_shape).double()

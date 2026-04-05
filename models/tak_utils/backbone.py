@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from copy import deepcopy
 import types
-import open_clip # type: ignore
+import open_clip
 
 from datasets.seq_8vision import Sequential8Vision
 from backbone import MammothBackbone

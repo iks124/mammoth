@@ -6,7 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import torch
 
-from models.tak_v2_utils.utils import FisherLoader
+from models.tak_utils.utils import FisherLoader
 
 
 def _write_fake_fisher_files(root: str, dataset_name: str, task_id: int = 0) -> None:

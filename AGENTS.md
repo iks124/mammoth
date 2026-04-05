@@ -346,7 +346,7 @@ Docs-only changes:
 Remote checkpoint/cache nuances:
 
 - `--loadcheck` accepts local files and remote URLs (including Hugging Face resolve links).
-- `tak_v2` Fisher loading accepts local paths, HTTP(S) base URLs, and `hf://...` sources via `--fisher_cache` when `--load_fisher=1`.
+- `TAK` Fisher loading accepts local paths, HTTP(S) base URLs, and `hf://...` sources via `--fisher_cache` when `--load_fisher=1`.
 - If a remote URL returns a Git LFS pointer text file instead of artifact bytes, loading fails (use a direct raw/resolve artifact URL).
 
 ## 13) Workflow expectations for agents

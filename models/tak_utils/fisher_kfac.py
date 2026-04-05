@@ -26,32 +26,32 @@ def register_hooks(name, module, forward=True, backward=True,
     if forward:
         assert forward_hooks_dict is not None
         if 'lin_proj' in name:
-            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_nosequence']) # type: ignore
+            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_nosequence'])
         elif isinstance(module, nn.Linear) or \
                 isinstance(module, nn.modules.linear.NonDynamicallyQuantizableLinear):
-            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward']) # type: ignore
+            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward'])
         elif isinstance(module, nn.LayerNorm):
-            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_layer_norm']) # type: ignore
+            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_layer_norm'])
         elif 'cls_token' in name:
-            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_layer_norm']) # type: ignore
+            module.forward_handle = module.register_forward_hook(forward_hooks_dict['hook_forward_layer_norm'])
 
     if backward:
         assert bacward_hooks_dict is not None
         if 'lin_proj' in name:
-            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_nosequence']) # type: ignore
+            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_nosequence'])
         elif isinstance(module, nn.Linear) or \
                 isinstance(module, nn.modules.linear.NonDynamicallyQuantizableLinear):
-            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward']) # type: ignore
+            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward'])
         elif isinstance(module, nn.LayerNorm):
-            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_layer_norm']) # type: ignore
+            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_layer_norm'])
         elif 'cls_token' in name:
-            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_cls_token']) # type: ignore
+            module.backward_handle = module.register_full_backward_hook(bacward_hooks_dict['hook_backward_cls_token'])
 
 
 class KFACComputer(nn.Module):
 
     def __init__(self, device: torch.device, debug_mode,
-                 train_percent: float = 1.0, num_samples_expectation: int = 2, precision: str = 'fp64'):
+                 train_percent: float = 1.0, num_samples_expectation: int = 2, fp_precision: str = 'fp64'):
 
         super().__init__()
 
@@ -64,7 +64,7 @@ class KFACComputer(nn.Module):
         self.debug_mode = debug_mode
         self.train_percent = train_percent
         self.num_samples_expectation = num_samples_expectation
-        self.precision = precision
+        self.fp_precision = fp_precision
 
     def to_be_fishered(self, name, module, all_param_finetuned):
         if not isinstance(module, nn.Linear) \
@@ -104,7 +104,7 @@ class KFACComputer(nn.Module):
         for name, module in net.visual_encoder.named_modules():
             if self.to_be_fishered(name, module, all_param_finetuned):
                 module.compute_bias = True if f"{name}.bias" in all_param_finetuned else False
-                module.precision = self.precision
+                module.fp_precision = self.fp_precision
                 register_hooks(name, module, forward=True, backward=False,
                                forward_hooks_dict=forward_hooks_dict)
 
@@ -146,7 +146,7 @@ class KFACComputer(nn.Module):
                 module.gram_input_c = None
                 del module.gram_input
                 del module.gram_input_c
-                del module.precision
+                del module.fp_precision
 
         ##################
 
@@ -175,7 +175,7 @@ class KFACComputer(nn.Module):
         }
 
         for name, module in net.visual_encoder.named_modules():
-            module.precision = self.precision
+            module.fp_precision = self.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 module.compute_bias = True if f"{name}.bias" in all_param_finetuned else False
                 register_hooks(name, module, forward=False, backward=True,
@@ -248,7 +248,7 @@ class KFACComputer(nn.Module):
 
         # remove hooks
         for name, module in net.visual_encoder.named_modules():
-            del module.precision
+            del module.fp_precision
             if self.to_be_fishered(name, module, all_param_finetuned):
                 del module.compute_bias
                 module.backward_handle.remove()
