@@ -354,6 +354,9 @@ def add_management_args(parser: ArgumentParser) -> None:
     Returns:
         None
     """
+    from utils.teleportation import add_teleportation_args
+    add_teleportation_args(parser)
+
     mng_group = parser.add_argument_group('Management arguments', 'Generic arguments to manage the experiment reproducibility, logging, debugging, etc.')
 
     mng_group.add_argument('--seed', type=int, default=None,

@@ -302,6 +302,31 @@ def train(model: ContinualModel, dataset: ContinualDataset,
 
                 train_pbar.close()
 
+            # --- Symmetry teleportation (if enabled) ---
+            if hasattr(args, 'teleport') and args.teleport:
+                from utils.teleportation import teleport_for_flat_minimum, TeleportMemory
+                if not hasattr(model, '_teleport_memory'):
+                    model._teleport_memory = TeleportMemory(
+                        samples_per_task=getattr(args, 'teleport_memory_per_task', 256))
+                model._teleport_memory.update(dataset.train_loader)
+                teleport_loader = model._teleport_memory.get_dataloader(
+                    batch_size=args.batch_size)
+                n_tasks_seen = len(model._teleport_memory.data)
+                n_steps = args.teleport_steps * n_tasks_seen
+                logging.info(f"[Teleport] Running teleportation after task {cur_task} "
+                             f"({n_tasks_seen} tasks in memory, "
+                             f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
+                             f"{n_steps} steps)...")
+                teleport_for_flat_minimum(
+                    net=model.net,
+                    dataloader=teleport_loader,
+                    loss_fn=model.loss,
+                    n_steps=n_steps,
+                    lr_t=args.teleport_lr,
+                    reg_lambda=args.teleport_reg,
+                    device=model.device,
+                )
+
             model.meta_end_task(dataset)
 
             accs = eval_dataset.evaluate(model, eval_dataset)
