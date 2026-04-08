@@ -42,66 +42,72 @@ class TAK(ContinualModel):
 
     @staticmethod
     def get_parser(parser) -> ArgumentParser:
-        # TODO: add group for clip-specific arguments
-        parser.add_argument(
+        parser.set_defaults(
+            optimizer="adamw",
+            lr=0.0003,
+            optim_wd=0.1,
+        )
+
+        clip_group = parser.add_argument_group("TAK CLIP")
+        clip_group.add_argument(
             "--clip_backbone",
             type=str,
             default="ViT-B/16",
             help="Backbone architecture for CLIP",
             choices=["ViT-B/16", "ViT-B/32", "ViT-L/14"],
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_linears",
             type=binary_to_boolean_type,
             default=1,
             help="Set to 1 fine-tune linear layers",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_attention",
             type=binary_to_boolean_type,
             default=1,
             help="Set to 1 fine-tune attention layers",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_ln",
             type=binary_to_boolean_type,
             default=1,
             help="Set to 1 fine-tune layer norm",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_class_embed",
             type=binary_to_boolean_type,
             default=1,
             help="Set to 1 fine-tune class embedding layers",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_proj",
             type=binary_to_boolean_type,
             default=1,
             help="Set to 1 fine-tune projection layers",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_pos_embed",
             type=binary_to_boolean_type,
             default=0,
             help="Set to 1 fine-tune posistional embedding",
         )
-        parser.add_argument(
+        clip_group.add_argument(
             "--ft_conv",
             type=binary_to_boolean_type,
             default=0,
             help="Set to 1 fine-tune convolutional layers",
         )
 
-        # TODO: add group for merging arguments
-        parser.add_argument(
+        merging_group = parser.add_argument_group("TAK Merging")
+        merging_group.add_argument(
             "--merging",
             type=str,
             default="ta",
             choices=["ta", "dare", "iso", "ties", "tsv"],
             help="Merging strategy for task vectors",
         )
-        parser.add_argument(
+        merging_group.add_argument(
             "--alpha_merging",
             type=str,
             default="one",
@@ -111,52 +117,52 @@ class TAK(ContinualModel):
             "To avoid errors, the value 'one' ensures that alpha=1 for each task",
         )
 
-        # TODO: add group for main method arguments
-        parser.add_argument(
+        main_group = parser.add_argument_group("TAK Main")
+        main_group.add_argument(
             "--save_task_vectors",
             type=binary_to_boolean_type,
             default=0,
             help="Save computed task vectors?",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--virtual_bs_n",
             type=int,
             default=1,
             help="chose how many chunks for vitual batch size",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--default_scale_factor",
             type=float,
             default=1,
             choices=[0, 1],
             help="Default scale factor for layer scaling if a single eigenvalue is present. 0 means no scaling, 1 means full scaling.",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--reg_lambda",
             type=float,
             default=500,
             help="Regularization weight (lambda in the paper)",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--fisher_ft_proj_scaler",
             type=float,
             default=0.1,
             help="Regularization scaling coeff. for the final linear projection",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--fisher_norm_scaler",
             type=float,
             default=10,
             help="Regularization scaling coeff. for inner feed-forward layers",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--scheduler_ntk",
             type=str,
             default="cosine",
             choices=["none", "cosine", "cosine_plus", "decay", "step"],
             help="LR scheduler type",
         )
-        parser.add_argument(
+        main_group.add_argument(
             "--clip_grad_norm",
             type=float,
             default=None,
@@ -164,14 +170,14 @@ class TAK(ContinualModel):
             help="Gradient clipping norm value - used if >0 and not None",
         )
 
-        # KFAC approximation args
-        parser.add_argument(
+        kfac_group = parser.add_argument_group("TAK KFAC")
+        kfac_group.add_argument(
             "--load_fisher",
             type=binary_to_boolean_type,
             default=0,
             help="Load KFAC map from cache?",
         )
-        parser.add_argument(
+        kfac_group.add_argument(
             "--fisher_cache",
             type=str,
             default="fisher_cache",
@@ -179,7 +185,7 @@ class TAK(ContinualModel):
             "Supports local directories, HTTP(S) base URLs, and HuggingFace sources "
             "using `hf://<owner>/<repo>/<optional/subpath>@<optional_revision>`.",
         )
-        parser.add_argument(
+        kfac_group.add_argument(
             "--train_percent",
             type=str,
             default="1.0",
@@ -188,50 +194,50 @@ class TAK(ContinualModel):
                                  If integer, it represents the number of samples used. \
                                  Put 1.0 to use the entire training set.",
         )
-        parser.add_argument(
+        kfac_group.add_argument(
             "--fisher_task_id",
             type=int,
             default=None,
             required=False,
             help="Compute KFAC approx. on this specific task",
         )
-        parser.add_argument(
+        kfac_group.add_argument(
             "--fisher_ideal",
             type=binary_to_boolean_type,
             default=0,
             help="Keep and use the fisher of each task (ideal - Eq. 7) or just the accumulated one (Eq. 8)",
         )
-        parser.add_argument(
+        kfac_group.add_argument(
             "--fisher_num_samples_expectation",
             type=int,
-            default=0,
+            default=1,
             help="Compute KFAC approx. on a fixed number of samples, subset of all the task",
         )
 
-        # TODO: create a new param group for ablation arguments
-        parser.add_argument(
+        ablation_group = parser.add_argument_group("TAK Ablation")
+        ablation_group.add_argument(
             "--tangent",
             type=binary_to_boolean_type,
             default=1,
             help="Use or disable linearized training and inference (NTK regime)",
         )
 
-        # TODO: create a new param group for extra parameters
-        parser.add_argument("--use_lora", type=binary_to_boolean_type, default=0)
-        parser.add_argument(
+        extra_group = parser.add_argument_group("TAK Extra")
+        extra_group.add_argument("--use_lora", type=binary_to_boolean_type, default=0)
+        extra_group.add_argument(
             "--fp_precision",
             type=str,
             default="fp32",
             choices=["fp32", "fp64"],
             help="Floating point fp_precision used during KFAC computations",
         )
-        parser.add_argument(
+        extra_group.add_argument(
             "--resume",
             type=binary_to_boolean_type,
             default=0,
             help="Resume previous training? NOTE: requires `load_path`",
         )
-        parser.add_argument(
+        extra_group.add_argument(
             "--load_path",
             type=str,
             default=None,
@@ -239,20 +245,20 @@ class TAK(ContinualModel):
             help="Path from which load the previous task's task vectors. Used with `resume=1`",
         )
 
-        # TODO: create group for evaluation args
-        parser.add_argument(
+        eval_group = parser.add_argument_group("TAK Evaluation")
+        eval_group.add_argument(
             "--alpha_sweep_start",
             type=float,
             default=0.1,
             help="Starting merging alpha value for sensitivity analysis - used by `compute_metrics_by_alpha`",
         )
-        parser.add_argument(
+        eval_group.add_argument(
             "--alpha_sweep_end",
             type=float,
             default=1.5,
             help="Final merging alpha value for sensitivity analysis - used by `compute_metrics_by_alpha`",
         )
-        parser.add_argument(
+        eval_group.add_argument(
             "--alpha_sweep_step",
             type=float,
             default=0.1,
