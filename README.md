@@ -20,7 +20,7 @@ With Mammoth, nothing is set in stone. You can easily add new models, datasets, 
 
 ## 📖 Table of Contents
 
-- [Documentation](#documentation)
+- [Documentation](https://aimagelab.github.io/mammoth/index.html)
   - [Getting Started](https://aimagelab.github.io/mammoth/getting_started/index.html)
   - [How to Run](https://aimagelab.github.io/mammoth/how_to_run/index.html)
   - [How to Upgrade](https://aimagelab.github.io/mammoth/how_to_upgrade/index.html)
@@ -169,6 +169,7 @@ Mammoth currently supports **more than 70** models, with new releases covering t
 - SLCA: Slow Learner with Classifier Alignment for Continual Learning on a Pre-trained Model (SLCA) - _Requires_ `pip install timm==0.9.8`: `slca`.
 - Slow Learner with Classifier Alignment (SLCA): `slca`.
 - Synaptic Intelligence (SI): `si`.
+- Task Arithmetic with KFAC regularization (TAK): `tak`.
 - Transfer without Forgetting (TwF): `twf`.
 - ZSCL: Zero-Shot Continual Learning: `zscl`.
 </details>
