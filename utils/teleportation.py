@@ -143,7 +143,7 @@ def teleport_for_flat_minimum(net: nn.Module,
                                lr_t: float = 0.01,
                                reg_lambda: float = 0.1,
                                device: str = 'cuda',
-                               pairs: Optional[List[Dict]] = None):
+                               pairs: Optional[List[Dict]] = None) -> Dict:
     """
     Teleport network parameters to a flatter minimum on the *same* loss
     level-set, using the ReLU scaling symmetry.
@@ -157,7 +157,12 @@ def teleport_for_flat_minimum(net: nn.Module,
         reg_lambda:  L2 penalty on log(t) to prevent extreme scaling
         device:      torch device string
         pairs:       pre-computed pair list (auto-detected if None)
+
+    Returns:
+        dict with optimization history: grad_norm_sq, reg, total_loss, max_abs_log_t per step
     """
+    history = {'grad_norm_sq': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
+
     was_training = net.training
     net.eval()                              # use fixed BN running stats
 
@@ -166,7 +171,7 @@ def teleport_for_flat_minimum(net: nn.Module,
     if not pairs:
         logging.warning("[Teleport] No teleportable pairs found — skipping.")
         net.train(was_training)
-        return
+        return history
 
     # ---------- snapshot the params we will modify ----------
     state_dict = net.state_dict()
@@ -213,6 +218,12 @@ def teleport_for_flat_minimum(net: nn.Module,
         reg = sum(lt.pow(2).sum() for lt in all_log_t)
 
         flatness_loss = grad_norm_sq + reg_lambda * reg
+
+        # record optimization history
+        history['grad_norm_sq'].append(grad_norm_sq.item())
+        history['reg'].append(reg.item())
+        history['total_loss'].append(flatness_loss.item())
+        history['max_abs_log_t'].append(max(lt.abs().max().item() for lt in all_log_t))
 
         opt_t.zero_grad()
         flatness_loss.backward()
@@ -265,6 +276,7 @@ def teleport_for_flat_minimum(net: nn.Module,
 
     net.train(was_training)
     logging.info("[Teleport] done.")
+    return history
 
 
 # ---------------------------------------------------------------------------

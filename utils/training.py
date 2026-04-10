@@ -305,6 +305,21 @@ def train(model: ContinualModel, dataset: ContinualDataset,
             # --- Symmetry teleportation (if enabled) ---
             if hasattr(args, 'teleport') and args.teleport:
                 from utils.teleportation import teleport_for_flat_minimum, TeleportMemory
+
+                # --- Checkpoint A: evaluate BEFORE teleportation ---
+                logging.info(f"[Teleport] Checkpoint A: evaluating before teleportation (task {cur_task})...")
+                accs_before_teleport = eval_dataset.evaluate(model, eval_dataset)
+                logging.info(f"[Teleport] Checkpoint A (before teleport): class-il={accs_before_teleport[0]}, "
+                             f"task-il={accs_before_teleport[1]}")
+                if not args.nowand and wandb is not None:
+                    wandb.log({
+                        'teleport/acc_before_mean': np.mean(accs_before_teleport[0]),
+                        'teleport/task': cur_task,
+                    })
+                    for i_acc, acc_val in enumerate(accs_before_teleport[0]):
+                        wandb.log({f'teleport/acc_before_task{i_acc}': acc_val})
+
+                # --- Run teleportation ---
                 if not hasattr(model, '_teleport_memory'):
                     model._teleport_memory = TeleportMemory(
                         samples_per_task=getattr(args, 'teleport_memory_per_task', 256))
@@ -317,7 +332,7 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                              f"({n_tasks_seen} tasks in memory, "
                              f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
                              f"{n_steps} steps)...")
-                teleport_for_flat_minimum(
+                teleport_history = teleport_for_flat_minimum(
                     net=model.net,
                     dataloader=teleport_loader,
                     loss_fn=model.loss,
@@ -326,6 +341,47 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                     reg_lambda=args.teleport_reg,
                     device=model.device,
                 )
+
+                # --- Log teleport optimization curve ---
+                if teleport_history['grad_norm_sq']:
+                    gn_start = teleport_history['grad_norm_sq'][0]
+                    gn_end = teleport_history['grad_norm_sq'][-1]
+                    logging.info(f"[Teleport] Optimization curve: grad_norm² {gn_start:.4f} -> {gn_end:.4f} "
+                                 f"(ratio={gn_end/gn_start:.4f}), "
+                                 f"max|log_t| {teleport_history['max_abs_log_t'][-1]:.4f}")
+                    if not args.nowand and wandb is not None:
+                        for step_i, (gn, rg, tl, mlt) in enumerate(zip(
+                                teleport_history['grad_norm_sq'],
+                                teleport_history['reg'],
+                                teleport_history['total_loss'],
+                                teleport_history['max_abs_log_t'])):
+                            wandb.log({
+                                'teleport_curve/grad_norm_sq': gn,
+                                'teleport_curve/reg': rg,
+                                'teleport_curve/total_loss': tl,
+                                'teleport_curve/max_abs_log_t': mlt,
+                                'teleport_curve/step': step_i,
+                                'teleport_curve/task': cur_task,
+                            })
+
+                # --- Checkpoint B: evaluate AFTER teleportation (before next task) ---
+                logging.info(f"[Teleport] Checkpoint B: evaluating after teleportation (task {cur_task})...")
+                accs_after_teleport = eval_dataset.evaluate(model, eval_dataset)
+                logging.info(f"[Teleport] Checkpoint B (after teleport): class-il={accs_after_teleport[0]}, "
+                             f"task-il={accs_after_teleport[1]}")
+                if not args.nowand and wandb is not None:
+                    wandb.log({
+                        'teleport/acc_after_mean': np.mean(accs_after_teleport[0]),
+                        'teleport/task': cur_task,
+                    })
+                    for i_acc, acc_val in enumerate(accs_after_teleport[0]):
+                        wandb.log({f'teleport/acc_after_task{i_acc}': acc_val})
+
+                # --- Log delta (A -> B) ---
+                delta = np.mean(accs_after_teleport[0]) - np.mean(accs_before_teleport[0])
+                logging.info(f"[Teleport] Delta (B-A): {delta:+.2f}% mean accuracy")
+                if not args.nowand and wandb is not None:
+                    wandb.log({'teleport/acc_delta_mean': delta, 'teleport/task': cur_task})
 
             model.meta_end_task(dataset)
 
