@@ -236,6 +236,10 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                     if dataset.SETTING == 'class-il':
                         results_mask_classes[cur_task - 1] = results_mask_classes[cur_task - 1] + accs[1]
 
+                # --- Pre-task accuracy snapshot for forgetting metric ---
+                if hasattr(args, 'teleport') and args.teleport and cur_task > 0:
+                    model._teleport_acc_start = eval_dataset.evaluate(model, eval_dataset)
+
                 # Scheduler is automatically reloaded after each task if defined in the dataset.
                 # If the model defines it, it becomes the job of the model to reload it.
                 scheduler = get_scheduler(model, args, reload_optim=True) if not hasattr(model, 'scheduler') else model.custom_scheduler
@@ -306,82 +310,106 @@ def train(model: ContinualModel, dataset: ContinualDataset,
             if hasattr(args, 'teleport') and args.teleport:
                 from utils.teleportation import teleport_for_flat_minimum, TeleportMemory
 
-                # --- Checkpoint A: evaluate BEFORE teleportation ---
-                logging.info(f"[Teleport] Checkpoint A: evaluating before teleportation (task {cur_task})...")
-                accs_before_teleport = eval_dataset.evaluate(model, eval_dataset)
-                logging.info(f"[Teleport] Checkpoint A (before teleport): class-il={accs_before_teleport[0]}, "
-                             f"task-il={accs_before_teleport[1]}")
-                if not args.nowand and wandb is not None:
-                    wandb.log({
-                        'teleport/acc_before_mean': np.mean(accs_before_teleport[0]),
-                        'teleport/task': cur_task,
-                    })
-                    for i_acc, acc_val in enumerate(accs_before_teleport[0]):
-                        wandb.log({f'teleport/acc_before_task{i_acc}': acc_val})
+                # --- [1] Forgetting metric: acc drop on OLD tasks during this task's training ---
+                # accs_end_of_task is the reference baseline (after training, before teleport)
+                accs_end_of_task = eval_dataset.evaluate(model, eval_dataset)
 
-                # --- Run teleportation ---
+                if cur_task > 0 and hasattr(model, '_teleport_acc_start'):
+                    old_acc_start = list(model._teleport_acc_start[0])[:cur_task]
+                    old_acc_end   = list(accs_end_of_task[0])[:cur_task]
+                    per_task_forgetting = [s - e for s, e in zip(old_acc_start, old_acc_end)]
+                    mean_forgetting = float(np.mean(per_task_forgetting))
+                    logging.info(
+                        f"[Teleport] Forgetting during task {cur_task}: "
+                        f"per_task={[f'{f:+.2f}' for f in per_task_forgetting]}, "
+                        f"mean={mean_forgetting:+.2f}%"
+                    )
+                    if not args.nowand and wandb is not None:
+                        wandb.log({'forgetting/mean': mean_forgetting,
+                                   'forgetting/task': cur_task})
+                        for i_t, f_val in enumerate(per_task_forgetting):
+                            wandb.log({f'forgetting/task_{i_t}': f_val,
+                                       'forgetting/task': cur_task})
+
+                # --- [2] Teleportation ---
                 if not hasattr(model, '_teleport_memory'):
                     model._teleport_memory = TeleportMemory(
                         samples_per_task=getattr(args, 'teleport_memory_per_task', 256))
                 model._teleport_memory.update(dataset.train_loader)
-                teleport_loader = model._teleport_memory.get_dataloader(
-                    batch_size=args.batch_size)
                 n_tasks_seen = len(model._teleport_memory.data)
                 n_steps = args.teleport_steps * n_tasks_seen
-                logging.info(f"[Teleport] Running teleportation after task {cur_task} "
-                             f"({n_tasks_seen} tasks in memory, "
-                             f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
-                             f"{n_steps} steps)...")
-                teleport_history = teleport_for_flat_minimum(
-                    net=model.net,
-                    dataloader=teleport_loader,
-                    loss_fn=model.loss,
-                    n_steps=n_steps,
-                    lr_t=args.teleport_lr,
-                    reg_lambda=args.teleport_reg,
-                    device=model.device,
-                )
 
-                # --- Log teleport optimization curve ---
-                if teleport_history['grad_norm_sq']:
-                    gn_start = teleport_history['grad_norm_sq'][0]
-                    gn_end = teleport_history['grad_norm_sq'][-1]
-                    logging.info(f"[Teleport] Optimization curve: grad_norm² {gn_start:.4f} -> {gn_end:.4f} "
-                                 f"(ratio={gn_end/gn_start:.4f}), "
-                                 f"max|log_t| {teleport_history['max_abs_log_t'][-1]:.4f}")
+                old_loader = model._teleport_memory.get_old_dataloader(
+                    batch_size=args.batch_size)
+                new_loader = model._teleport_memory.get_new_dataloader(
+                    batch_size=args.batch_size)
+
+                teleport_history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
+
+                if old_loader is None:
+                    logging.info(f"[Teleport] Task 1 — no old tasks yet, skipping "
+                                 f"(conflict objective requires >=2 tasks).")
+                else:
+                    logging.info(
+                        f"[Teleport] Running teleportation after task {cur_task} "
+                        f"({n_tasks_seen} tasks in memory, "
+                        f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
+                        f"{n_steps} steps)..."
+                    )
+                    teleport_history = teleport_for_flat_minimum(
+                        net=model.net,
+                        old_dataloader=old_loader,
+                        new_dataloader=new_loader,
+                        loss_fn=model.loss,
+                        n_steps=n_steps,
+                        lr_t=args.teleport_lr,
+                        reg_lambda=args.teleport_reg,
+                        device=model.device,
+                    )
+
+                # --- [3] Conflict metrics (was the gradient conflict reduced?) ---
+                if teleport_history['cos_sim']:
+                    cs_before = teleport_history['cos_sim'][0]
+                    cs_after  = teleport_history['cos_sim'][-1]
+                    cs_delta  = cs_after - cs_before
+                    max_log_t = teleport_history['max_abs_log_t'][-1]
+                    logging.info(
+                        f"[Teleport] cos_sim: {cs_before:.4f} -> {cs_after:.4f} "
+                        f"(delta={cs_delta:+.4f}), max|log_t|={max_log_t:.4f}"
+                    )
                     if not args.nowand and wandb is not None:
-                        for step_i, (gn, rg, tl, mlt) in enumerate(zip(
-                                teleport_history['grad_norm_sq'],
+                        wandb.log({
+                            'conflict/cos_sim_before': cs_before,
+                            'conflict/cos_sim_after':  cs_after,
+                            'conflict/cos_sim_delta':  cs_delta,
+                            'conflict/max_abs_log_t':  max_log_t,
+                            'conflict/task': cur_task,
+                        })
+                        for step_i, (cs, rg, tl, mlt) in enumerate(zip(
+                                teleport_history['cos_sim'],
                                 teleport_history['reg'],
                                 teleport_history['total_loss'],
                                 teleport_history['max_abs_log_t'])):
                             wandb.log({
-                                'teleport_curve/grad_norm_sq': gn,
-                                'teleport_curve/reg': rg,
-                                'teleport_curve/total_loss': tl,
-                                'teleport_curve/max_abs_log_t': mlt,
+                                'teleport_curve/cos_sim':        cs,
+                                'teleport_curve/reg':            rg,
+                                'teleport_curve/total_loss':     tl,
+                                'teleport_curve/max_abs_log_t':  mlt,
                                 'teleport_curve/step': step_i,
                                 'teleport_curve/task': cur_task,
                             })
 
-                # --- Checkpoint B: evaluate AFTER teleportation (before next task) ---
-                logging.info(f"[Teleport] Checkpoint B: evaluating after teleportation (task {cur_task})...")
-                accs_after_teleport = eval_dataset.evaluate(model, eval_dataset)
-                logging.info(f"[Teleport] Checkpoint B (after teleport): class-il={accs_after_teleport[0]}, "
-                             f"task-il={accs_after_teleport[1]}")
-                if not args.nowand and wandb is not None:
-                    wandb.log({
-                        'teleport/acc_after_mean': np.mean(accs_after_teleport[0]),
-                        'teleport/task': cur_task,
-                    })
-                    for i_acc, acc_val in enumerate(accs_after_teleport[0]):
-                        wandb.log({f'teleport/acc_after_task{i_acc}': acc_val})
-
-                # --- Log delta (A -> B) ---
-                delta = np.mean(accs_after_teleport[0]) - np.mean(accs_before_teleport[0])
-                logging.info(f"[Teleport] Delta (B-A): {delta:+.2f}% mean accuracy")
-                if not args.nowand and wandb is not None:
-                    wandb.log({'teleport/acc_delta_mean': delta, 'teleport/task': cur_task})
+                # --- [4] Invariance sanity check (should be ~0) ---
+                if old_loader is not None:
+                    accs_after_teleport = eval_dataset.evaluate(model, eval_dataset)
+                    invariance_delta = (float(np.mean(accs_after_teleport[0]))
+                                        - float(np.mean(accs_end_of_task[0])))
+                    logging.info(
+                        f"[Teleport] Invariance delta: {invariance_delta:+.4f}% (expected ~0)"
+                    )
+                    if not args.nowand and wandb is not None:
+                        wandb.log({'teleport/invariance_delta': invariance_delta,
+                                   'teleport/task': cur_task})
 
             model.meta_end_task(dataset)
 

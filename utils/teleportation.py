@@ -137,7 +137,8 @@ def _build_scaled_state(pairs, all_log_t, original_state, device):
 
 @torch.enable_grad()
 def teleport_for_flat_minimum(net: nn.Module,
-                               dataloader,
+                               old_dataloader,
+                               new_dataloader,
                                loss_fn,
                                n_steps: int = 50,
                                lr_t: float = 0.01,
@@ -145,23 +146,30 @@ def teleport_for_flat_minimum(net: nn.Module,
                                device: str = 'cuda',
                                pairs: Optional[List[Dict]] = None) -> Dict:
     """
-    Teleport network parameters to a flatter minimum on the *same* loss
-    level-set, using the ReLU scaling symmetry.
+    Teleport network parameters to reduce gradient conflict between old and new
+    tasks, using the ReLU scaling symmetry (output-invariant transformation).
+
+    Objective: minimise -cosine_sim(g_old, g_new) + reg_lambda * ||log_t||²
+    where g_old and g_new are the gradients of the loss (w.r.t. scaled params)
+    on old-task data and new-task data respectively.  The symmetry guarantee
+    ensures the network output — and therefore the loss value — is unchanged by
+    the t-scaling, so no explicit loss-invariance constraint is needed.
 
     Args:
-        net:         backbone network (e.g. model.net in Mammoth)
-        dataloader:  current-task training loader
-        loss_fn:     task loss (e.g. CrossEntropyLoss)
-        n_steps:     optimisation steps for the scaling factors
-        lr_t:        learning rate for the Adam optimiser on log(t)
-        reg_lambda:  L2 penalty on log(t) to prevent extreme scaling
-        device:      torch device string
-        pairs:       pre-computed pair list (auto-detected if None)
+        net:             backbone network (e.g. model.net in Mammoth)
+        old_dataloader:  loader over past-task samples (TeleportMemory tasks 0..k-1)
+        new_dataloader:  loader over current-task samples (TeleportMemory task k)
+        loss_fn:         task loss (e.g. CrossEntropyLoss)
+        n_steps:         optimisation steps for the scaling factors
+        lr_t:            learning rate for the Adam optimiser on log(t)
+        reg_lambda:      L2 penalty on log(t) to prevent extreme scaling
+        device:          torch device string
+        pairs:           pre-computed pair list (auto-detected if None)
 
     Returns:
-        dict with optimization history: grad_norm_sq, reg, total_loss, max_abs_log_t per step
+        dict with optimisation history: cos_sim, reg, total_loss, max_abs_log_t per step
     """
-    history = {'grad_norm_sq': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
+    history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
 
     was_training = net.training
     net.eval()                              # use fixed BN running stats
@@ -186,53 +194,66 @@ def teleport_for_flat_minimum(net: nn.Module,
                  for p in pairs]
     opt_t = torch.optim.Adam(all_log_t, lr=lr_t)
 
-    data_iter = iter(dataloader)
+    old_iter = iter(old_dataloader)
+    new_iter = iter(new_dataloader)
 
     for step in range(n_steps):
-        # --- get a batch (loop over dataloader if exhausted) ---
+        # --- get batches from both old and new tasks ---
         try:
-            batch = next(data_iter)
+            batch_old = next(old_iter)
         except StopIteration:
-            data_iter = iter(dataloader)
-            batch = next(data_iter)
+            old_iter = iter(old_dataloader)
+            batch_old = next(old_iter)
 
-        x = batch[0].to(device)
-        y = batch[1].to(device)
+        try:
+            batch_new = next(new_iter)
+        except StopIteration:
+            new_iter = iter(new_dataloader)
+            batch_new = next(new_iter)
+
+        x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
+        x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
 
         # --- build differentiable scaled params ---
         modified_state = _build_scaled_state(pairs, all_log_t,
                                              original_state, device)
-
-        # --- forward with scaled params (output is invariant) ---
-        output = torch.func.functional_call(net, modified_state, (x,))
-        loss = loss_fn(output, y)
-
-        # --- gradient of loss w.r.t. scaled params ---
         modified_params = list(modified_state.values())
-        grads = torch.autograd.grad(loss, modified_params, create_graph=True)
 
-        # --- flatness objective: minimise total gradient-norm² ---
-        grad_norm_sq = sum(g.pow(2).sum() for g in grads)
+        # --- gradients on old tasks ---
+        out_old = torch.func.functional_call(net, modified_state, (x_old,))
+        loss_old = loss_fn(out_old, y_old)
+        g_old = torch.autograd.grad(loss_old, modified_params, create_graph=True)
+        g_old_flat = torch.cat([g.reshape(-1) for g in g_old])
+
+        # --- gradients on new task ---
+        out_new = torch.func.functional_call(net, modified_state, (x_new,))
+        loss_new = loss_fn(out_new, y_new)
+        g_new = torch.autograd.grad(loss_new, modified_params, create_graph=True)
+        g_new_flat = torch.cat([g.reshape(-1) for g in g_new])
+
+        # --- conflict objective: maximise cosine similarity ---
+        cos_sim = (g_old_flat * g_new_flat).sum() / (
+            g_old_flat.norm() * g_new_flat.norm() + 1e-8)
 
         # --- regularisation: keep t close to 1 ---
         reg = sum(lt.pow(2).sum() for lt in all_log_t)
 
-        flatness_loss = grad_norm_sq + reg_lambda * reg
+        conflict_loss = -cos_sim + reg_lambda * reg
 
-        # record optimization history
-        history['grad_norm_sq'].append(grad_norm_sq.item())
+        # record optimisation history
+        history['cos_sim'].append(cos_sim.item())
         history['reg'].append(reg.item())
-        history['total_loss'].append(flatness_loss.item())
+        history['total_loss'].append(conflict_loss.item())
         history['max_abs_log_t'].append(max(lt.abs().max().item() for lt in all_log_t))
 
         opt_t.zero_grad()
-        flatness_loss.backward()
+        conflict_loss.backward()
         opt_t.step()
 
         if step % max(n_steps // 5, 1) == 0:
             logging.info(
                 f"[Teleport] step {step:3d}/{n_steps}  "
-                f"grad_norm²={grad_norm_sq.item():.4f}  "
+                f"cos_sim={cos_sim.item():.4f}  "
                 f"reg={reg.item():.4f}  "
                 f"max|log_t|={max(lt.abs().max().item() for lt in all_log_t):.4f}"
             )
@@ -259,7 +280,7 @@ def teleport_for_flat_minimum(net: nn.Module,
     # ---------- sanity check: output invariance ----------
     net.eval()
     with torch.no_grad():
-        batch = next(iter(dataloader))
+        batch = next(iter(new_dataloader))
         x_chk = batch[0].to(device)
 
         out_after = net(x_chk)
@@ -315,6 +336,25 @@ class TeleportMemory:
         all_x = torch.cat(self.data)
         all_y = torch.cat(self.targets)
         ds = TensorDataset(all_x, all_y)
+        return DataLoader(ds, batch_size=batch_size, shuffle=True,
+                          drop_last=False)
+
+    def get_old_dataloader(self, batch_size: int = 32) -> Optional[DataLoader]:
+        """Return a DataLoader over all tasks except the most recent one.
+
+        Returns None if fewer than 2 tasks have been stored (no 'old' tasks yet).
+        """
+        if len(self.data) < 2:
+            return None
+        all_x = torch.cat(self.data[:-1])
+        all_y = torch.cat(self.targets[:-1])
+        ds = TensorDataset(all_x, all_y)
+        return DataLoader(ds, batch_size=batch_size, shuffle=True,
+                          drop_last=False)
+
+    def get_new_dataloader(self, batch_size: int = 32) -> DataLoader:
+        """Return a DataLoader over the most recently stored task's samples."""
+        ds = TensorDataset(self.data[-1], self.targets[-1])
         return DataLoader(ds, batch_size=batch_size, shuffle=True,
                           drop_last=False)
 
