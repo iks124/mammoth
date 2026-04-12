@@ -9,13 +9,13 @@ Arguments
 	*Help*: Which dataset to perform experiments on.
 
 	- *Default*: ``None``
-	- *Choices*: ``seq-cifar100, seq-cub200, seq-cub200-rs, seq-cifar10, perm-mnist, seq-mnist, seq-resisc45, seq-cifar10-224-rs, seq-cropdisease, seq-isic, seq-tinyimg, seq-tinyimg-r, seq-celeba, seq-imagenet-r, seq-chestx, seq-mit67, seq-cars196, rot-mnist, mnist-360, seq-cifar100-224, seq-cifar10-224, seq-cifar100-224-rs, seq-eurosat-rgb``
+	- *Choices*: ``seq-cifar100, seq-cars196, seq-dtd, seq-eurosat-rgb, seq-gtsrb, seq-mnist-224, seq-resisc45, seq-sun397, seq-svhn, seq-8vision, seq-cub200, seq-cub200-rs, seq-cifar10, perm-mnist, seq-mnist, seq-cifar10-224-rs, seq-cropdisease, seq-isic, seq-tinyimg, seq-tinyimg-r, seq-celeba, seq-imagenet-r, seq-chestx, seq-mit67, rot-mnist, mnist-360, seq-cifar100-224, seq-cifar10-224, seq-cifar100-224-rs``
 
 **\-\-model** : str (with underscores replaced by dashes)
 	*Help*: Model name.
 
 	- *Default*: ``None``
-	- *Choices*: ``derpp, xder-rpc, xder-ce, er-ace, ewc-on, er-ace-aer-abs, er-tricks, coda-prompt, xder-rpc-cscct, sgd, icarl-cscct, er, cgil, er-ace-star, er-star, clip, gdumb-lider, joint-gcl, derpp-casper, gss, zscl, derpp-cscct, icarl, lwf-mc, agem, twf, lwf, llava, derpp-lider, dualprompt, xder-rpc-star, lws, moe-adapters, starprompt, mer, bic, lucir, second-stage-starprompt, ranpac, hal, der, slca, icarl-lider, gdumb, er-ace-casper, idefics, rpc, puridiver, dap, xder, spr, attriclip, derpp-star, joint, si, cnll, first-stage-starprompt, gem, icarl-casper, fdr, er-ace-tricks, er-ace-lider, l2p, pnn, agem-r, ccic, er-ace-cscct, second-order, xder-rpc-casper``
+	- *Choices*: ``derpp, xder-rpc, xder-ce, er-ace, ewc-on, er-ace-aer-abs, er-tricks, coda-prompt, xder-rpc-cscct, sgd, icarl-cscct, er, cgil, er-ace-star, er-star, clip, gdumb-lider, joint-gcl, derpp-casper, gss, zscl, derpp-cscct, icarl, lwf-mc, agem, twf, lwf, llava, derpp-lider, dualprompt, xder-rpc-star, lws, moe-adapters, starprompt, mer, bic, lucir, second-stage-starprompt, ranpac, hal, der, slca, icarl-lider, gdumb, er-ace-casper, idefics, rpc, puridiver, dap, xder, spr, attriclip, derpp-star, joint, si, tak-v2, cnll, first-stage-starprompt, gem, tak, icarl-casper, fdr, er-ace-tricks, er-ace-lider, l2p, pnn, agem-r, ccic, er-ace-cscct, second-order, xder-rpc-casper``
 
 **\-\-backbone** : str (with underscores replaced by dashes)
 	*Help*: Backbone network name.
@@ -29,7 +29,7 @@ Arguments
 	- *Default*: ``False``
 
 **\-\-dataset_config** : str
-	*Help*: The configuration used for this dataset (e.g., number of tasks, transforms, backbone architecture, etc.).The available configurations are defined in the `datasets/config/<dataset>` folder.
+	*Help*: The configuration used for this dataset (e.g., number of tasks, transforms, backbone architecture, etc.).The available configurations are defined in the `datasets/configs/<dataset>` folder.
 
 	- *Default*: ``None``
 

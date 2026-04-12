@@ -4,6 +4,7 @@
 *.pdf
 data/
 data
+checkpoints
 checkpoints/
 *.png
 *.pt
@@ -106,3 +107,5 @@ docs/model_args
 cache
 
 uv.lock
+
+vitb16

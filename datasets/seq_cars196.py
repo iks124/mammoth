@@ -1,6 +1,7 @@
 import logging
 import os
 import torch
+import pickle
 from typing import List, Dict
 from typing import Tuple, Union
 from tqdm.auto import tqdm
@@ -80,7 +81,12 @@ class MyCars196(Dataset):
             logging.info(f"Loading pre-processed {train_str} dataset...")
             self.data = torch.load(f'{root}/{train_str}_images.pt', weights_only=True)
             self.targets = torch.load(f'{root}/{train_str}_labels.pt', weights_only=True)
-            self.class_names = json.load(open(f'{root}/class_names.json', 'rt'))
+            if os.path.exists(f'{root}/class_names.json'):
+                with open(f'{root}/class_names.json', 'rt') as f:
+                    self.class_names = json.load(f)
+            elif os.path.exists(base_path() + f'cars196/class_names.pkl'):
+                with open(base_path() + f'cars196/class_names.pkl', 'rb') as f:
+                    self.class_names = pickle.load(f)
 
         self.class_names = MyCars196.get_class_names()
 
@@ -99,14 +105,15 @@ class MyCars196(Dataset):
 
     @staticmethod
     def get_class_names():
-        if not os.path.exists(base_path() + f'cars196/class_names.json'):
-            logging.info("Class names not found, performing pre-processing...")
-            class_idx_to_name = load_and_preprocess_cars196(names_only=True)
-            logging.info('Done')
-        else:
+        if os.path.exists(base_path() + f'cars196/class_names.json'):
             with open(base_path() + f'cars196/class_names.json', 'rt') as f:
                 class_idx_to_name = json.load(f)
-        class_names = list(class_idx_to_name.values())
+            class_names = list(class_idx_to_name.values())
+        elif os.path.exists(base_path() + f'cars196/class_names.pkl'):
+            with open(base_path() + f'cars196/class_names.pkl', 'rb') as f:
+                class_names = pickle.load(f)
+        else:
+            raise ValueError("Class names not found")
         return class_names
 
     def __len__(self):
@@ -209,9 +216,9 @@ class SequentialCars196(ContinualDataset):
         return transform
 
     @set_default_from_args('n_epochs')
-    def get_epochs(self):
+    def get_epochs():
         return 50
 
     @set_default_from_args('batch_size')
-    def get_batch_size(self):
+    def get_batch_size():
         return 128

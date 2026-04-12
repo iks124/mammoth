@@ -52,7 +52,10 @@ def set_default_from_args(arg_name: str):
         if arg_name in DEFAULT_ARGS[caller_name]:
             raise ValueError(f"Argument `{arg_name}` already has a default value in `{caller_name}`")
         if n_args == 1:  # has self
-            DEFAULT_ARGS[caller_name][arg_name] = func(None)
+            try:
+                DEFAULT_ARGS[caller_name][arg_name] = func(None)
+            except Exception:
+                pass # if the function relies on self, it cannot be called here, so we will call it when the dataset is initialized and self is available
         else:
             DEFAULT_ARGS[caller_name][arg_name] = func()
 

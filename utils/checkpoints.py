@@ -335,6 +335,7 @@ def _get_sigint_handler(fn: Callable, ckpt_path: str) -> Callable:
         if GLOBALS['SHOULD_STOP']: # should have stopped already, forcing
             logging.info("SIGINT received again. Forcing exit...")
             sys.exit(1)
+        GLOBALS['SHOULD_STOP'] = True
 
         current = frame
         _locals = {}
@@ -360,5 +361,4 @@ def _get_sigint_handler(fn: Callable, ckpt_path: str) -> Callable:
                                     scheduler_st=scheduler.state_dict() if scheduler is not None else None,
                                     checkpoint_name=ckpt_path)
         
-        GLOBALS['SHOULD_STOP'] = True
     return _handle_sigint_terminal

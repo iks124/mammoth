@@ -12,13 +12,6 @@ From the project root, you can run:
 
     python main.py --model <model_name> --dataset <dataset_name> [options]
 
-or equivalently:
-
-.. code-block:: bash
-
-    python utils/main.py --model <model_name> --dataset <dataset_name> [options]
-    # The `utils/main.py` is here to stay for backward compatibility.
-
 You can list all available arguments by running:
 
 .. code-block:: bash
@@ -68,6 +61,8 @@ Common Options
 - ``--wandb_entity`` and ``--wandb_project``: specify the Weights & Biases entity and project for logging
 
 For more details on arguments, see :ref:`module-utils`.
+
+For remote checkpoint loading (including Hugging Face URLs), TAK Fisher cache loading from remote sources, and artifact upload to Hugging Face, see :doc:`getting_started/checkpoints`.
 
 Examples
 ~~~~~~~~

@@ -3,7 +3,7 @@ First steps
 
 1. Install the requirements with ``pip install -r requirements.txt``.
 
-2. From the root directory, run ``python utils/main.py --help`` to see the available options.
+2. From the root directory, run ``python main.py --help`` to see the available options.
 
 See :ref:`module-utils` for more information about the most useful arguments
 

@@ -179,9 +179,9 @@ class SequentialImagenetR(ContinualDataset):
         return transform
 
     @set_default_from_args('n_epochs')
-    def get_epochs(self):
+    def get_epochs():
         return 50
 
     @set_default_from_args('batch_size')
-    def get_batch_size(self):
+    def get_batch_size():
         return 128
