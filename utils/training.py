@@ -339,10 +339,14 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                 n_tasks_seen = len(model._teleport_memory.data)
                 n_steps = args.teleport_steps * n_tasks_seen
 
+                # Use full-batch gradients to avoid mini-batch noise that
+                # causes the cos_sim optimisation to oscillate without converging.
+                n_old = sum(x.size(0) for x in model._teleport_memory.data[:-1]) if n_tasks_seen > 1 else 0
+                n_new = model._teleport_memory.data[-1].size(0)
                 old_loader = model._teleport_memory.get_old_dataloader(
-                    batch_size=args.batch_size)
+                    batch_size=max(n_old, 1))
                 new_loader = model._teleport_memory.get_new_dataloader(
-                    batch_size=args.batch_size)
+                    batch_size=n_new)
 
                 teleport_history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
 
@@ -369,32 +373,50 @@ def train(model: ContinualModel, dataset: ContinualDataset,
 
                 # --- [3] Conflict metrics (was the gradient conflict reduced?) ---
                 if teleport_history['cos_sim']:
-                    cs_before = teleport_history['cos_sim'][0]
-                    cs_after  = teleport_history['cos_sim'][-1]
-                    cs_delta  = cs_after - cs_before
-                    max_log_t = teleport_history['max_abs_log_t'][-1]
+                    cs_curve   = teleport_history['cos_sim']
+                    cs_before  = cs_curve[0]
+                    cs_after   = cs_curve[-1]
+                    cs_delta   = cs_after - cs_before
+                    max_log_t  = teleport_history['max_abs_log_t'][-1]
+                    mean_log_t = teleport_history['mean_abs_log_t'][-1]
+                    grad_norm  = teleport_history['grad_norm_log_t']
+                    # fraction of steps where cos_sim improved (convergence quality)
+                    monotone_rate = sum(
+                        1 for a, b in zip(cs_curve, cs_curve[1:]) if b > a
+                    ) / max(len(cs_curve) - 1, 1)
                     logging.info(
                         f"[Teleport] cos_sim: {cs_before:.4f} -> {cs_after:.4f} "
-                        f"(delta={cs_delta:+.4f}), max|log_t|={max_log_t:.4f}"
+                        f"(delta={cs_delta:+.4f})  "
+                        f"monotone_rate={monotone_rate:.2f}  "
+                        f"max|log_t|={max_log_t:.4f}  mean|log_t|={mean_log_t:.4f}  "
+                        f"grad_norm(first/last)={grad_norm[0]:.4f}/{grad_norm[-1]:.4f}"
                     )
                     if not args.nowand and wandb is not None:
                         wandb.log({
-                            'conflict/cos_sim_before': cs_before,
-                            'conflict/cos_sim_after':  cs_after,
-                            'conflict/cos_sim_delta':  cs_delta,
-                            'conflict/max_abs_log_t':  max_log_t,
+                            'conflict/cos_sim_before':   cs_before,
+                            'conflict/cos_sim_after':    cs_after,
+                            'conflict/cos_sim_delta':    cs_delta,
+                            'conflict/monotone_rate':    monotone_rate,
+                            'conflict/max_abs_log_t':    max_log_t,
+                            'conflict/mean_abs_log_t':   mean_log_t,
+                            'conflict/grad_norm_first':  grad_norm[0],
+                            'conflict/grad_norm_last':   grad_norm[-1],
                             'conflict/task': cur_task,
                         })
-                        for step_i, (cs, rg, tl, mlt) in enumerate(zip(
+                        for step_i, (cs, rg, tl, mlt, mmlt, gn) in enumerate(zip(
                                 teleport_history['cos_sim'],
                                 teleport_history['reg'],
                                 teleport_history['total_loss'],
-                                teleport_history['max_abs_log_t'])):
+                                teleport_history['max_abs_log_t'],
+                                teleport_history['mean_abs_log_t'],
+                                teleport_history['grad_norm_log_t'])):
                             wandb.log({
-                                'teleport_curve/cos_sim':        cs,
-                                'teleport_curve/reg':            rg,
-                                'teleport_curve/total_loss':     tl,
-                                'teleport_curve/max_abs_log_t':  mlt,
+                                'teleport_curve/cos_sim':         cs,
+                                'teleport_curve/reg':             rg,
+                                'teleport_curve/total_loss':      tl,
+                                'teleport_curve/max_abs_log_t':   mlt,
+                                'teleport_curve/mean_abs_log_t':  mmlt,
+                                'teleport_curve/grad_norm_log_t': gn,
                                 'teleport_curve/step': step_i,
                                 'teleport_curve/task': cur_task,
                             })

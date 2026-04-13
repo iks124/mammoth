@@ -169,7 +169,8 @@ def teleport_for_flat_minimum(net: nn.Module,
     Returns:
         dict with optimisation history: cos_sim, reg, total_loss, max_abs_log_t per step
     """
-    history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': []}
+    history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'max_abs_log_t': [],
+               'mean_abs_log_t': [], 'grad_norm_log_t': []}
 
     was_training = net.training
     net.eval()                              # use fixed BN running stats
@@ -214,21 +215,29 @@ def teleport_for_flat_minimum(net: nn.Module,
         x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
         x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
 
-        # --- build differentiable scaled params ---
-        modified_state = _build_scaled_state(pairs, all_log_t,
-                                             original_state, device)
-        modified_params = list(modified_state.values())
+        # --- build two independent scaled states so the two forward passes
+        #     have completely separate computation graphs; this avoids a
+        #     diamond-shaped DAG where g_old.grad_fn and g_new.grad_fn share
+        #     the same modified_params node, which can cause subtle graph
+        #     freeing issues during conflict_loss.backward(). ---
+        modified_state_old = _build_scaled_state(pairs, all_log_t,
+                                                 original_state, device)
+        modified_params_old = list(modified_state_old.values())
+
+        modified_state_new = _build_scaled_state(pairs, all_log_t,
+                                                 original_state, device)
+        modified_params_new = list(modified_state_new.values())
 
         # --- gradients on old tasks ---
-        out_old = torch.func.functional_call(net, modified_state, (x_old,))
+        out_old = torch.func.functional_call(net, modified_state_old, (x_old,))
         loss_old = loss_fn(out_old, y_old)
-        g_old = torch.autograd.grad(loss_old, modified_params, create_graph=True)
+        g_old = torch.autograd.grad(loss_old, modified_params_old, create_graph=True)
         g_old_flat = torch.cat([g.reshape(-1) for g in g_old])
 
         # --- gradients on new task ---
-        out_new = torch.func.functional_call(net, modified_state, (x_new,))
+        out_new = torch.func.functional_call(net, modified_state_new, (x_new,))
         loss_new = loss_fn(out_new, y_new)
-        g_new = torch.autograd.grad(loss_new, modified_params, create_graph=True)
+        g_new = torch.autograd.grad(loss_new, modified_params_new, create_graph=True)
         g_new_flat = torch.cat([g.reshape(-1) for g in g_new])
 
         # --- conflict objective: maximise cosine similarity ---
@@ -240,22 +249,30 @@ def teleport_for_flat_minimum(net: nn.Module,
 
         conflict_loss = -cos_sim + reg_lambda * reg
 
-        # record optimisation history
+        # record optimisation history (before gradient step)
         history['cos_sim'].append(cos_sim.item())
         history['reg'].append(reg.item())
         history['total_loss'].append(conflict_loss.item())
         history['max_abs_log_t'].append(max(lt.abs().max().item() for lt in all_log_t))
+        history['mean_abs_log_t'].append(
+            sum(lt.abs().mean().item() for lt in all_log_t) / len(all_log_t))
 
         opt_t.zero_grad()
         conflict_loss.backward()
+
+        # gradient norm of log_t: key signal-strength diagnostic
+        grad_norm = (sum(lt.grad.pow(2).sum().item() for lt in all_log_t)) ** 0.5
+        history['grad_norm_log_t'].append(grad_norm)
+
         opt_t.step()
 
         if step % max(n_steps // 5, 1) == 0:
             logging.info(
                 f"[Teleport] step {step:3d}/{n_steps}  "
                 f"cos_sim={cos_sim.item():.4f}  "
-                f"reg={reg.item():.4f}  "
-                f"max|log_t|={max(lt.abs().max().item() for lt in all_log_t):.4f}"
+                f"max|log_t|={max(lt.abs().max().item() for lt in all_log_t):.4f}  "
+                f"mean|log_t|={history['mean_abs_log_t'][-1]:.4f}  "
+                f"grad_norm={grad_norm:.4f}"
             )
 
     # ---------- commit final scaling ----------
