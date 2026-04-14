@@ -2,7 +2,10 @@ from typing import Tuple
 from itertools import chain
 import logging
 from copy import deepcopy
-import open_clip
+try:
+    import open_clip
+except ImportError:
+    open_clip = None
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms

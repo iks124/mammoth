@@ -3,7 +3,10 @@ import json
 import os
 import site
 import sys
-import open_clip
+try:
+    import open_clip
+except ImportError:
+    open_clip = None
 import numpy as np
 import torch
 import torch.nn.functional as F

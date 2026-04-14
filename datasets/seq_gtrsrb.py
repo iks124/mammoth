@@ -1,5 +1,8 @@
 import os
-import open_clip
+try:
+    import open_clip
+except ImportError:
+    open_clip = None
 from typing import Tuple
 
 import numpy as np
