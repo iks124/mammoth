@@ -575,6 +575,108 @@ def teleport_lora_for_cl(net: nn.Module,
     return history
 
 
+@torch.enable_grad()
+def teleport_lora_repair(net: nn.Module,
+                          old_dataloader,
+                          loss_fn,
+                          n_steps: int = 20,
+                          lr_lora: float = 1e-3,
+                          reg_lambda: float = 0.1,
+                          lora_rank: int = 4,
+                          device: str = 'cuda') -> dict:
+    """
+    LoRA-based old-task loss repair (H5).
+
+    After training on task t, use LoRA to minimise the old-task memory loss
+    while penalising large weight changes. This acts as a targeted "recall"
+    step in the LoRA subspace without touching the full network weights.
+
+    Objective:
+        L = L_old(θ + ΔΘ)  +  reg_lambda * ||BA||_F²
+
+    Unlike cos_sim objectives, this directly minimises forgetting and has
+    a nonzero gradient at B=0 (because ∂L_old/∂ΔΘ ≠ 0 at ΔΘ=0 in general,
+    unless we are already at the exact old-task optimum).
+
+    After optimisation, LoRA is merged into the network.
+    """
+    history = {'loss_old': [], 'delta_norm': []}
+
+    was_training = net.training
+    net.eval()
+
+    original_state = {k: v.clone() for k, v in net.state_dict().items()}
+
+    # Reference old-task loss (before repair)
+    with torch.no_grad():
+        ref_losses = []
+        for batch in old_dataloader:
+            x, y = batch[0].to(device), batch[1].to(device)
+            ref_losses.append(loss_fn(net(x), y).item())
+        l_old_ref = sum(ref_losses) / len(ref_losses)
+
+    lora_list = _get_lora_params(net, rank=lora_rank, device=device)
+    if not lora_list:
+        logging.warning("[Teleport-Repair] No LoRA layers — skipping.")
+        net.train(was_training)
+        return history
+
+    all_lora = [lp['B'] for lp in lora_list] + [lp['A'] for lp in lora_list]
+    opt = torch.optim.Adam(all_lora, lr=lr_lora)
+
+    logging.info(f"[Teleport-Repair] rank={lora_rank}, steps={n_steps}, "
+                 f"ref_loss_old={l_old_ref:.4f}")
+
+    old_iter = iter(old_dataloader)
+
+    for step in range(n_steps):
+        try:
+            batch = next(old_iter)
+        except StopIteration:
+            old_iter = iter(old_dataloader)
+            batch = next(old_iter)
+
+        x, y = batch[0].to(device), batch[1].to(device)
+        lora_state = _build_lora_state(lora_list, original_state, device)
+
+        out = torch.func.functional_call(net, lora_state, (x,))
+        l_old = loss_fn(out, y)
+        reg = sum((lp['B'] @ lp['A']).pow(2).sum() for lp in lora_list)
+        total = l_old + reg_lambda * reg
+
+        history['loss_old'].append(l_old.item())
+        with torch.no_grad():
+            dn = sum((lp['B'] @ lp['A']).norm().item() for lp in lora_list)
+        history['delta_norm'].append(dn)
+
+        opt.zero_grad()
+        total.backward()
+        opt.step()
+
+        if step % max(n_steps // 4, 1) == 0:
+            logging.info(f"[Teleport-Repair] step {step:3d}/{n_steps}  "
+                         f"loss_old={l_old.item():.4f}  delta_norm={dn:.4f}")
+
+    # Merge LoRA
+    with torch.no_grad():
+        final_state = net.state_dict()
+        for lp in lora_list:
+            delta = lp['B'] @ lp['A']
+            if lp['type'] == 'conv':
+                delta = delta.reshape(*lp['shape'])
+            final_state[lp['weight_key']] = (
+                original_state[lp['weight_key']].to(device) + delta.detach()
+            )
+        net.load_state_dict(final_state)
+
+    logging.info(
+        f"[Teleport-Repair] done. loss_old: {l_old_ref:.4f} → "
+        f"{history['loss_old'][-1]:.4f}  delta_norm_final={history['delta_norm'][-1]:.4f}"
+    )
+    net.train(was_training)
+    return history
+
+
 def apply_htr(optimizer, delta_theta: torch.Tensor, grad_pre: torch.Tensor):
     """
     Historical Trajectory Reuse (HTR) from COST paper.

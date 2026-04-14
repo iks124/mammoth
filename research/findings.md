@@ -5,82 +5,93 @@
 
 ---
 
-## Current Understanding（当前认知）
+## Current Understanding（当前认知，2026-04-14 outer loop）
 
 ### 已否定的方向
 
-1. **ReLU scaling + grad_norm² 最小化**（阶段1）：优化不收敛，精度下降 -2.84%
+1. **ReLU scaling + grad_norm² 最小化**：精度下降 -2.84%，优化不收敛
 
-2. **ReLU scaling + cos_sim 最大化（mini-batch）**：mini-batch 噪声使 log_t 被冻住（max|log_t| ≤ 0.022），无效
+2. **ReLU scaling + cos_sim（mini-batch）**：梯度噪声冻住参数，无效
 
-3. **ReLU scaling + cos_sim 最大化（全量 batch）**：reg=0.1 时单 seed 有 +2.2%，但多 seed 验证均值 -1.51%，不稳定
+3. **ReLU scaling + cos_sim（全量 batch）**：单 seed +2.2%，多 seed 均值 -1.51%，不稳定
 
-4. **ReLU scaling 的根本瓶颈**：
-   - 自由度 512 维 / 网络 11M 参数 = 0.005%
-   - cos_sim ≠ forgetting reduction（漏洞1）
-   - 单点优化无轨迹保证（漏洞5）
+4. **LoRA + COST sharpness 目标**（H1）：L_t 在 B=0 时梯度=0，L_g 爆炸，LoRA norm→15000，网络崩溃 ~10%
 
-### 关键文献洞见：COST（2503.04046）
+5. **LoRA + cos_sim**（H1b）：cos_sim 优化成功（-0.13→0.99），但 delta_norm=3，旧任务精度 -12~27%，均值 41.93%（**-3.70% vs baseline**）
 
-COST 在 MTL 场景中成功应用 teleportation，关键差异：
+### 核心矛盾（已证伪的假设）
 
-1. **LoRA 替代 ReLU scaling**：自由度从 512 提升到 rank×model_dim（数量级差异）
-2. **双目标**：loss invariance + gradient maximization（sharpness），而非 cos_sim
-3. **HTR 策略**：解决 teleportation 后 Adam momentum 不匹配问题
-4. **条件触发**：检测冲突才 teleport，不是每步都做
+> **"找到一个 cos_sim 更高的参数点就能减少遗忘"**
 
----
+这个假设在两种参数化下都失败了：
+- **ReLU scaling**：输出不变（无损），但512维自由度不足以实质性改变 cos_sim，轻微扰动效果随机
+- **LoRA**：有足够自由度将 cos_sim 从-0.13推到0.99，但 delta_norm=3 破坏了已学表征，比不 teleport 更差
 
-## Patterns and Insights（规律与洞见）
+**根本矛盾**：改变 cos_sim 需要大幅改变参数 → 大幅改变参数破坏旧任务表征 → 净效果为负
 
-- ReLU scaling 的核心问题是**自由度不足**，而非目标函数的选择
-- cos_sim 作为代理目标的根本问题：幅度信息丢失 + 零阶保证
-- **LoRA** 是可行的高自由度替代方案（COST 验证有效）
-- CL 和 MTL 的任务冲突结构高度相似：old tasks = A, new task = B
+这与 MTL（COST 成功的场景）的本质区别：
+- MTL：teleportation 后继续训练所有任务，自然恢复
+- CL：旧任务被冻结，teleportation 造成的损坏不可恢复（ER 只有少量 buffer，无法完全恢复）
 
 ---
 
-## Lessons and Constraints（教训）
+## Patterns and Insights
 
-- `--nowand` 不是 Mammoth 的 CLI 参数，会报错
-- ER + seq-cifar10 + n_epochs=1 的单 seed 方差极大（43%~49%），需要多 seed
-- teleportation 时序：必须在任务 t **训练前**执行（已修复）
-- 全量 batch 对 teleportation 稳定性至关重要（mini-batch 下梯度方向不一致）
+1. **输出不变性是 CL teleportation 的必要条件**，不是可选的。只有 ReLU scaling 提供严格输出不变性，但其自由度太小。两者无法同时满足。
+
+2. **cos_sim 在所有实验中都不是有效的 forgetting 代理**：改善 cos_sim 从未稳定地改善 Class-IL。
+
+3. **COST 的成功依赖于 MTL 的 online recovery 机制**，这在 CL 中不存在。
+
+4. **漏洞1（cos_sim≠forgetting）和漏洞2（自由度）之间存在 trade-off**：增大自由度使 cos_sim 可优化，但同时放大了漏洞1的危害。
+
+---
+
+## Lessons and Constraints
+
+- `--nowand` 不是 Mammoth CLI 参数
+- ER + n_epochs=1 单 seed 方差极大，需要多 seed（3~4个）
+- teleportation 时序：必须在任务 t 训练前执行
+- LoRA+cos_sim：reg=0.01 → delta_norm=3.0 → 旧任务精度 -12%
+- COST sharpness：L_t gradient=0 at B=0 → 爆炸，无法使用
 
 ---
 
 ## Open Questions（开放问题）
 
-1. **COST-CL 假设是否成立**：LoRA teleportation (loss invariant on old memory + gradient max on new task) 能否减少 CL forgetting？
-2. **HTR 在 CL 中的作用**：任务切换时调制 Adam momentum 是否有额外收益？
-3. **触发条件**：CL 中是否需要冲突检测触发，还是每个任务都做？
-4. **超参数**：γ、LoRA rank、teleportation 步数的敏感性？
+1. **是否存在一种变换**，既有足够大的自由度，又能保证输出不变？（除了 ReLU 缩放之外）
+2. **teleportation 的时机**：训练中间（每 epoch 后）是否比训练前更有效？
+3. **完全不同的方向**：不再用 teleportation，改用 LoRA 做其他 CL 增强？
 
 ---
 
 ## Hypotheses（假设列表）
 
-### H1（主要）：COST-CL —— LoRA teleportation for CL
-- **假设**：在任务 t 训练前，用 LoRA (rank=4) 对 shared backbone teleport，目标 = L_old_invariance - γ · L_new_sharpness，能改善 ER 在 seq-cifar10 上的 Class-IL 精度
-- **预测**：均值 > 45.64%（当前 no-teleport baseline），多 seed 稳定
-- **状态**：待实验
+### ❌ H1：COST sharpness — 失败（LoRA 爆炸）
+### ❌ H1b：LoRA+cos_sim — 失败（delta_norm=3，损坏旧任务，-3.70%）
 
-### H2：HTR 的贡献
-- **假设**：在 H1 基础上加 HTR 策略（调制任务 t 开始时的 Adam momentum），有额外收益
-- **预测**：在 H1 基础上 +1~2%
-- **状态**：待 H1 验证后
+### H4（新）：输出不变 LoRA（constrained）
+- **假设**：给 LoRA 加显式输出不变约束（KL/MSE on old memory outputs），使 delta_norm 被压制到 <0.1，cos_sim 在此约束下小幅改善，净效果为正
+- **预测**：与 baseline 持平或小幅提升（+0~1%）
+- **方法**：augmented Lagrangian 或 penalty method：`-cos_sim + λ_kl * KL(p(θ+ΔΘ)||p(θ)) + λ_reg * ||BA||²`
+- **状态**：待实现
 
-### H3：触发条件
-- **假设**：用冲突检测（而非每个任务都 teleport）触发，可以降低开销同时保持效果
-- **状态**：待 H1 验证后
+### H5（新）：放弃 cos_sim，改用 intra-task LoRA fine-tuning
+- **假设**：在每个任务边界，用 LoRA 在旧任务 memory 上做少量 fine-tuning（最小化旧任务 loss），相当于精确的 gradient 步骤但只改动 LoRA 子空间，然后 merge，减少遗忘
+- **预测**：均值 > 46%
+- **方法**：`L = L_old(θ+ΔΘ)` + `λ * ||BA||²`，在 task t 训练结束后执行（修复旧任务 loss）
+- **状态**：待实现（这和 GEM/A-GEM 思想有共通之处，但用 LoRA 投影）
 
 ---
 
 ## Experiment Trajectory
 
-| Exp ID | 假设 | 配置 | Class-IL（均值4seed） | delta vs baseline |
-|--------|------|------|-----------------------|-------------------|
-| baseline | - | ER, no teleport, seeds 42/1/2/3 | 45.64% | - |
-| old-tp-cos | cos_sim | ReLU scaling, reg=0.1, seed 42 | 46.57% | +2.86% |
-| old-tp-multi | cos_sim | ReLU scaling, multi-seed | 44.13% | -1.51% |
-| H1-v1 | COST-CL | **待运行** | - | - |
+| Exp ID | 方法 | 均值 Class-IL（4 seed） | delta |
+|--------|------|------------------------|-------|
+| baseline | no teleport | 45.64% | — |
+| ReLU+cos seed42 only | ReLU scaling | 46.57% | +0.93% |
+| ReLU+cos multi-seed | ReLU scaling | 44.13% | -1.51% |
+| H1 COST sharpness | LoRA+sharpness | ~10% | **崩溃** |
+| H1b LoRA+cos_sim | LoRA+cos_sim | 41.93% | **-3.70%** |
+| H4 (planned) | constrained LoRA | — | — |
+| H5 (planned) | LoRA finetune old | — | — |

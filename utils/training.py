@@ -418,6 +418,33 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                             wandb.log({f'forgetting/task_{i_t}': f_val,
                                        'forgetting/task': cur_task})
 
+            # --- H5: LoRA repair on old memory (post-task, teleport_mode='repair') ---
+            if (hasattr(args, 'teleport') and args.teleport
+                    and getattr(args, 'teleport_mode', 'scaling') == 'repair'
+                    and cur_task > 0):
+                from utils.teleportation import teleport_lora_repair, TeleportMemory
+                if not hasattr(model, '_teleport_memory'):
+                    model._teleport_memory = TeleportMemory(
+                        samples_per_task=getattr(args, 'teleport_memory_per_task', 256))
+                    model._teleport_memory.update(train_loader)
+                n_old = sum(x.size(0) for x in model._teleport_memory.data[:-1]) if len(model._teleport_memory.data) > 1 else 0
+                if n_old > 0:
+                    old_loader = model._teleport_memory.get_old_dataloader(batch_size=min(n_old, 256))
+                    accs_pre = eval_dataset.evaluate(model, eval_dataset)
+                    teleport_lora_repair(
+                        net=model.net,
+                        old_dataloader=old_loader,
+                        loss_fn=model.loss,
+                        n_steps=getattr(args, 'teleport_steps', 20),
+                        lr_lora=args.teleport_lr,
+                        reg_lambda=args.teleport_reg,
+                        lora_rank=getattr(args, 'teleport_lora_rank', 4),
+                        device=model.device,
+                    )
+                    accs_post = eval_dataset.evaluate(model, eval_dataset)
+                    repair_delta = float(np.mean(accs_post[0])) - float(np.mean(accs_pre[0]))
+                    logging.info(f"[Repair] Post-repair acc delta: {repair_delta:+.4f}%")
+
             model.meta_end_task(dataset)
 
             accs = eval_dataset.evaluate(model, eval_dataset)
