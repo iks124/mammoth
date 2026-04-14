@@ -443,60 +443,40 @@ def teleport_lora_for_cl(net: nn.Module,
                           loss_fn,
                           n_steps: int = 50,
                           lr_lora: float = 1e-3,
-                          gamma: float = 1.0,
+                          reg_lambda: float = 0.01,
                           lora_rank: int = 4,
+                          device: str = 'cuda',
+                          # legacy args kept for API compat (unused)
+                          gamma: float = 1.0,
                           sharpness_radius: float = 0.05,
-                          n_sharpness: int = 5,
-                          device: str = 'cuda') -> dict:
+                          n_sharpness: int = 5) -> dict:
     """
-    COST-style LoRA teleportation adapted for Continual Learning.
+    LoRA-based gradient-conflict teleportation for Continual Learning.
 
     Objective (per step):
-        L_lora = L_t  -  gamma * L_g
+        L_lora = -cos_sim(g_old, g_new) + reg_lambda * ||ΔΘ||_F²
 
-        L_t  = mean_{i in old_tasks} |L_i(θ+ΔΘ) - L_i(θ)|
-               (loss invariance: teleportation must not hurt old tasks)
+        g_old  = gradient of L_old w.r.t. LoRA-modified weights
+        g_new  = gradient of L_new w.r.t. LoRA-modified weights
+        ||ΔΘ|| = Frobenius norm of LoRA perturbation BA (keeps changes small)
 
-        L_g  = max_{j=1..n_sharpness} L_new(θ+ΔΘ + ε_j), ε_j ~ Sphere(radius)
-               (sharpness proxy: find a sharper, more convergent point for new task)
+    Replaces the unstable COST sharpness objective (which diverged because
+    L_t gradient = 0 at B=0, leaving L_g unconstrained).
+    This objective is bounded (cos_sim ∈ [-1,1]) and stable.
 
-    After optimisation, LoRA weights BA are merged into the network.
-    The network output on old tasks is approximately preserved (up to L_t ≈ 0).
+    Compared to the old ReLU-scaling version:
+    - Same cos_sim objective, but 145K LoRA dims vs 512 scaling dims.
+    - Much stronger gradient signal; regularised by explicit LoRA norm.
 
-    Args:
-        net:               backbone network
-        old_dataloader:    loader over past-task memory (tasks 0..t-1)
-        new_dataloader:    loader over current-task samples (task t)
-        loss_fn:           task loss (e.g. CrossEntropyLoss)
-        n_steps:           LoRA optimisation steps
-        lr_lora:           learning rate for Adam on LoRA params
-        gamma:             weight for sharpness objective vs loss invariance
-        lora_rank:         rank r for LoRA adapters
-        sharpness_radius:  radius δ of perturbation sphere for sharpness
-        n_sharpness:       number of random perturbations to sample
-        device:            torch device string
-
-    Returns:
-        dict with per-step history: l_t, l_g, total_loss
+    After optimisation, LoRA weights are merged into the network weights.
     """
-    history = {'l_t': [], 'l_g': [], 'total_loss': [], 'delta_norm': []}
+    history = {'cos_sim': [], 'reg': [], 'total_loss': [], 'delta_norm': []}
 
     was_training = net.training
     net.eval()
 
-    # Snapshot original weights
     original_state = {k: v.clone() for k, v in net.state_dict().items()}
 
-    # Compute frozen reference losses on old tasks (L*_i in COST paper)
-    with torch.no_grad():
-        old_ref_losses = []
-        for batch in old_dataloader:
-            x, y = batch[0].to(device), batch[1].to(device)
-            out = net(x)
-            old_ref_losses.append(loss_fn(out, y).item())
-        l_old_ref = sum(old_ref_losses) / len(old_ref_losses)
-
-    # Build LoRA parameters
     lora_list = _get_lora_params(net, rank=lora_rank, device=device)
     if not lora_list:
         logging.warning("[Teleport-LoRA] No LoRA-able layers found — skipping.")
@@ -508,13 +488,13 @@ def teleport_lora_for_cl(net: nn.Module,
 
     n_lora_params = sum(p.numel() for p in all_lora)
     logging.info(f"[Teleport-LoRA] {len(lora_list)} layers, "
-                 f"rank={lora_rank}, total LoRA params={n_lora_params}")
+                 f"rank={lora_rank}, LoRA params={n_lora_params}, "
+                 f"steps={n_steps}, lr={lr_lora}, reg={reg_lambda}")
 
     old_iter = iter(old_dataloader)
     new_iter = iter(new_dataloader)
 
     for step in range(n_steps):
-        # Refresh iterators
         try:
             batch_old = next(old_iter)
         except StopIteration:
@@ -529,36 +509,35 @@ def teleport_lora_for_cl(net: nn.Module,
         x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
         x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
 
-        # Build teleported state
-        lora_state = _build_lora_state(lora_list, original_state, device)
+        # Build two independent LoRA states (avoid shared-graph issues)
+        lora_state_old = _build_lora_state(lora_list, original_state, device)
+        lora_params_old = list(lora_state_old.values())
 
-        # --- L_t: Loss invariance on old tasks ---
-        out_old = torch.func.functional_call(net, lora_state, (x_old,))
-        l_old_new = loss_fn(out_old, y_old)
-        l_t = torch.abs(l_old_new - l_old_ref)
+        lora_state_new = _build_lora_state(lora_list, original_state, device)
+        lora_params_new = list(lora_state_new.values())
 
-        # --- L_g: Sharpness proxy on new task ---
-        # Sample n_sharpness random perturbations from sphere of radius δ
-        # Add to ALL LoRA-modified weights (reuse lora_state base)
-        sharpness_vals = []
-        for _ in range(n_sharpness):
-            perturbed_state = {}
-            for key, w in lora_state.items():
-                eps = torch.randn_like(w)
-                eps = eps * (sharpness_radius / (eps.norm() + 1e-8))
-                perturbed_state[key] = w + eps
-            out_new_p = torch.func.functional_call(net, perturbed_state, (x_new,))
-            sharpness_vals.append(loss_fn(out_new_p, y_new))
+        # Gradients w.r.t. LoRA-modified parameters (create_graph for 2nd order)
+        out_old = torch.func.functional_call(net, lora_state_old, (x_old,))
+        loss_old = loss_fn(out_old, y_old)
+        g_old = torch.autograd.grad(loss_old, lora_params_old, create_graph=True)
+        g_old_flat = torch.cat([g.reshape(-1) for g in g_old])
 
-        l_g = torch.stack(sharpness_vals).max()
+        out_new = torch.func.functional_call(net, lora_state_new, (x_new,))
+        loss_new = loss_fn(out_new, y_new)
+        g_new = torch.autograd.grad(loss_new, lora_params_new, create_graph=True)
+        g_new_flat = torch.cat([g.reshape(-1) for g in g_new])
 
-        total_loss = l_t - gamma * l_g
+        cos_sim = (g_old_flat * g_new_flat).sum() / (
+            g_old_flat.norm() * g_new_flat.norm() + 1e-8)
 
-        history['l_t'].append(l_t.item())
-        history['l_g'].append(l_g.item())
+        # LoRA Frobenius norm regularisation (prevents explosion)
+        lora_reg = sum((lp['B'] @ lp['A']).pow(2).sum() for lp in lora_list)
+
+        total_loss = -cos_sim + reg_lambda * lora_reg
+
+        history['cos_sim'].append(cos_sim.item())
+        history['reg'].append(lora_reg.item())
         history['total_loss'].append(total_loss.item())
-
-        # delta norm (how far LoRA moves the weights)
         with torch.no_grad():
             dn = sum((lp['B'] @ lp['A']).norm().item() for lp in lora_list)
         history['delta_norm'].append(dn)
@@ -570,8 +549,8 @@ def teleport_lora_for_cl(net: nn.Module,
         if step % max(n_steps // 5, 1) == 0:
             logging.info(
                 f"[Teleport-LoRA] step {step:3d}/{n_steps}  "
-                f"L_t={l_t.item():.4f}  L_g={l_g.item():.4f}  "
-                f"delta_norm={dn:.4f}"
+                f"cos_sim={cos_sim.item():.4f}  "
+                f"delta_norm={dn:.4f}  reg={lora_reg.item():.4f}"
             )
 
     # --- Merge LoRA into network weights ---
@@ -586,19 +565,11 @@ def teleport_lora_for_cl(net: nn.Module,
             )
         net.load_state_dict(final_state)
 
-    # --- Sanity check: loss on old tasks should be approximately preserved ---
-    net.eval()
-    with torch.no_grad():
-        post_losses = []
-        for batch in old_dataloader:
-            x, y = batch[0].to(device), batch[1].to(device)
-            post_losses.append(loss_fn(net(x), y).item())
-        l_old_post = sum(post_losses) / len(post_losses)
-        logging.info(
-            f"[Teleport-LoRA] done. Old-task loss: "
-            f"{l_old_ref:.4f} → {l_old_post:.4f} "
-            f"(delta={l_old_post - l_old_ref:+.4f})"
-        )
+    logging.info(
+        f"[Teleport-LoRA] done. cos_sim: "
+        f"{history['cos_sim'][0]:.4f} → {history['cos_sim'][-1]:.4f}  "
+        f"delta_norm_final={history['delta_norm'][-1]:.4f}"
+    )
 
     net.train(was_training)
     return history

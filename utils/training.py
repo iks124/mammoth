@@ -315,13 +315,11 @@ def train(model: ContinualModel, dataset: ContinualDataset,
                         model._teleport_acc_pre_training = accs_after_teleport
 
                         # Log LoRA-mode metrics
-                        if teleport_mode == 'lora' and teleport_history.get('l_t'):
-                            lt_vals = teleport_history['l_t']
-                            lg_vals = teleport_history['l_g']
+                        if teleport_mode == 'lora' and teleport_history.get('cos_sim'):
+                            cs_vals = teleport_history['cos_sim']
                             dn_vals = teleport_history['delta_norm']
                             logging.info(
-                                f"[Teleport-LoRA] L_t: {lt_vals[0]:.4f}->{lt_vals[-1]:.4f}  "
-                                f"L_g: {lg_vals[0]:.4f}->{lg_vals[-1]:.4f}  "
+                                f"[Teleport-LoRA] cos_sim: {cs_vals[0]:.4f}->{cs_vals[-1]:.4f}  "
                                 f"delta_norm: {dn_vals[0]:.4f}->{dn_vals[-1]:.4f}"
                             )
 
