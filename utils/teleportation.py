@@ -1,19 +1,26 @@
 """
 Symmetry Teleportation for Continual Learning
 ==============================================
-Teleports model parameters to a flatter region of the loss landscape
-using the ReLU positive scaling symmetry, executed at the end of each task.
+Two teleportation strategies are implemented:
 
-Key invariance: for layers connected by ReLU, scaling pre-activation params
-by t>0 and post-activation weights by 1/t preserves the network output exactly.
-By optimizing t to minimize gradient norm at the current-task loss, we find a
-flatter parameterization that reduces catastrophic forgetting on past tasks.
+1. ReLU scaling symmetry (original):
+   For layers connected by ReLU, scaling pre-activation params by t>0 and
+   post-activation weights by 1/t preserves the network output exactly.
+
+2. COST-style LoRA teleportation (recommended):
+   Adapts Zhou et al. 2025 "Continual Optimization with Symmetry Teleportation
+   for Multi-Task Learning" to the CL setting.
+   - Uses LoRA (low-rank adapter) as the teleportation mechanism: θ' = θ + BA
+   - Objective: L_t (loss invariance on old memory) - γ * L_g (sharpness on new task)
+   - Much larger parameter space (rank × model_dim vs 512) → stronger signal
+   - Merges LoRA back after teleportation → no inference overhead
 
 Usage:
-    Add --teleport 1 --teleport_steps 50 to any Mammoth training command.
+    --teleport 1 --teleport_mode lora --teleport_steps 50
 
-Reference:
+References:
     Zhao et al., "Symmetry Teleportation for Accelerated Optimization", NeurIPS 2022
+    Zhou et al., "Continual Optimization with Symmetry Teleportation for MTL", arXiv 2503.04046
 """
 
 import logging
@@ -377,6 +384,262 @@ class TeleportMemory:
 
 
 # ---------------------------------------------------------------------------
+# COST-style LoRA Teleportation for CL
+# ---------------------------------------------------------------------------
+
+def _get_lora_params(net: nn.Module, rank: int, device: str,
+                     target_types=(nn.Linear, nn.Conv2d)):
+    """
+    Create LoRA A, B matrices for all Linear and Conv2d layers in the network.
+
+    Returns a list of dicts with keys:
+        weight_key, B, A, type, shape (for conv)
+    """
+    lora_list = []
+    state = net.state_dict()
+
+    for name, module in net.named_modules():
+        if not isinstance(module, target_types):
+            continue
+        weight_key = f'{name}.weight'
+        if weight_key not in state:
+            continue
+
+        w = state[weight_key]
+        if isinstance(module, nn.Linear):
+            out_f, in_f = w.shape
+            B = torch.zeros(out_f, rank, device=device, requires_grad=True)
+            A = torch.randn(rank, in_f, device=device) * 0.01
+            A = A.detach().requires_grad_(True)
+            lora_list.append({'weight_key': weight_key, 'B': B, 'A': A,
+                               'type': 'linear'})
+        elif isinstance(module, nn.Conv2d):
+            out_ch, in_ch, kH, kW = w.shape
+            B = torch.zeros(out_ch, rank, device=device, requires_grad=True)
+            A = torch.randn(rank, in_ch * kH * kW, device=device) * 0.01
+            A = A.detach().requires_grad_(True)
+            lora_list.append({'weight_key': weight_key, 'B': B, 'A': A,
+                               'type': 'conv',
+                               'shape': (out_ch, in_ch, kH, kW)})
+
+    return lora_list
+
+
+def _build_lora_state(lora_list, original_state, device):
+    """Build partial state-dict with LoRA perturbation applied."""
+    modified = {}
+    for lp in lora_list:
+        delta = lp['B'] @ lp['A']  # (out_f, in_f) or (out_ch, in_ch*kH*kW)
+        if lp['type'] == 'conv':
+            delta = delta.reshape(*lp['shape'])
+        modified[lp['weight_key']] = original_state[lp['weight_key']].to(device) + delta
+    return modified
+
+
+@torch.enable_grad()
+def teleport_lora_for_cl(net: nn.Module,
+                          old_dataloader,
+                          new_dataloader,
+                          loss_fn,
+                          n_steps: int = 50,
+                          lr_lora: float = 1e-3,
+                          gamma: float = 1.0,
+                          lora_rank: int = 4,
+                          sharpness_radius: float = 0.05,
+                          n_sharpness: int = 5,
+                          device: str = 'cuda') -> dict:
+    """
+    COST-style LoRA teleportation adapted for Continual Learning.
+
+    Objective (per step):
+        L_lora = L_t  -  gamma * L_g
+
+        L_t  = mean_{i in old_tasks} |L_i(θ+ΔΘ) - L_i(θ)|
+               (loss invariance: teleportation must not hurt old tasks)
+
+        L_g  = max_{j=1..n_sharpness} L_new(θ+ΔΘ + ε_j), ε_j ~ Sphere(radius)
+               (sharpness proxy: find a sharper, more convergent point for new task)
+
+    After optimisation, LoRA weights BA are merged into the network.
+    The network output on old tasks is approximately preserved (up to L_t ≈ 0).
+
+    Args:
+        net:               backbone network
+        old_dataloader:    loader over past-task memory (tasks 0..t-1)
+        new_dataloader:    loader over current-task samples (task t)
+        loss_fn:           task loss (e.g. CrossEntropyLoss)
+        n_steps:           LoRA optimisation steps
+        lr_lora:           learning rate for Adam on LoRA params
+        gamma:             weight for sharpness objective vs loss invariance
+        lora_rank:         rank r for LoRA adapters
+        sharpness_radius:  radius δ of perturbation sphere for sharpness
+        n_sharpness:       number of random perturbations to sample
+        device:            torch device string
+
+    Returns:
+        dict with per-step history: l_t, l_g, total_loss
+    """
+    history = {'l_t': [], 'l_g': [], 'total_loss': [], 'delta_norm': []}
+
+    was_training = net.training
+    net.eval()
+
+    # Snapshot original weights
+    original_state = {k: v.clone() for k, v in net.state_dict().items()}
+
+    # Compute frozen reference losses on old tasks (L*_i in COST paper)
+    with torch.no_grad():
+        old_ref_losses = []
+        for batch in old_dataloader:
+            x, y = batch[0].to(device), batch[1].to(device)
+            out = net(x)
+            old_ref_losses.append(loss_fn(out, y).item())
+        l_old_ref = sum(old_ref_losses) / len(old_ref_losses)
+
+    # Build LoRA parameters
+    lora_list = _get_lora_params(net, rank=lora_rank, device=device)
+    if not lora_list:
+        logging.warning("[Teleport-LoRA] No LoRA-able layers found — skipping.")
+        net.train(was_training)
+        return history
+
+    all_lora = [lp['B'] for lp in lora_list] + [lp['A'] for lp in lora_list]
+    opt_lora = torch.optim.Adam(all_lora, lr=lr_lora)
+
+    n_lora_params = sum(p.numel() for p in all_lora)
+    logging.info(f"[Teleport-LoRA] {len(lora_list)} layers, "
+                 f"rank={lora_rank}, total LoRA params={n_lora_params}")
+
+    old_iter = iter(old_dataloader)
+    new_iter = iter(new_dataloader)
+
+    for step in range(n_steps):
+        # Refresh iterators
+        try:
+            batch_old = next(old_iter)
+        except StopIteration:
+            old_iter = iter(old_dataloader)
+            batch_old = next(old_iter)
+        try:
+            batch_new = next(new_iter)
+        except StopIteration:
+            new_iter = iter(new_dataloader)
+            batch_new = next(new_iter)
+
+        x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
+        x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
+
+        # Build teleported state
+        lora_state = _build_lora_state(lora_list, original_state, device)
+
+        # --- L_t: Loss invariance on old tasks ---
+        out_old = torch.func.functional_call(net, lora_state, (x_old,))
+        l_old_new = loss_fn(out_old, y_old)
+        l_t = torch.abs(l_old_new - l_old_ref)
+
+        # --- L_g: Sharpness proxy on new task ---
+        # Sample n_sharpness random perturbations from sphere of radius δ
+        # Add to ALL LoRA-modified weights (reuse lora_state base)
+        sharpness_vals = []
+        for _ in range(n_sharpness):
+            perturbed_state = {}
+            for key, w in lora_state.items():
+                eps = torch.randn_like(w)
+                eps = eps * (sharpness_radius / (eps.norm() + 1e-8))
+                perturbed_state[key] = w + eps
+            out_new_p = torch.func.functional_call(net, perturbed_state, (x_new,))
+            sharpness_vals.append(loss_fn(out_new_p, y_new))
+
+        l_g = torch.stack(sharpness_vals).max()
+
+        total_loss = l_t - gamma * l_g
+
+        history['l_t'].append(l_t.item())
+        history['l_g'].append(l_g.item())
+        history['total_loss'].append(total_loss.item())
+
+        # delta norm (how far LoRA moves the weights)
+        with torch.no_grad():
+            dn = sum((lp['B'] @ lp['A']).norm().item() for lp in lora_list)
+        history['delta_norm'].append(dn)
+
+        opt_lora.zero_grad()
+        total_loss.backward()
+        opt_lora.step()
+
+        if step % max(n_steps // 5, 1) == 0:
+            logging.info(
+                f"[Teleport-LoRA] step {step:3d}/{n_steps}  "
+                f"L_t={l_t.item():.4f}  L_g={l_g.item():.4f}  "
+                f"delta_norm={dn:.4f}"
+            )
+
+    # --- Merge LoRA into network weights ---
+    with torch.no_grad():
+        final_state = net.state_dict()
+        for lp in lora_list:
+            delta = lp['B'] @ lp['A']
+            if lp['type'] == 'conv':
+                delta = delta.reshape(*lp['shape'])
+            final_state[lp['weight_key']] = (
+                original_state[lp['weight_key']].to(device) + delta.detach()
+            )
+        net.load_state_dict(final_state)
+
+    # --- Sanity check: loss on old tasks should be approximately preserved ---
+    net.eval()
+    with torch.no_grad():
+        post_losses = []
+        for batch in old_dataloader:
+            x, y = batch[0].to(device), batch[1].to(device)
+            post_losses.append(loss_fn(net(x), y).item())
+        l_old_post = sum(post_losses) / len(post_losses)
+        logging.info(
+            f"[Teleport-LoRA] done. Old-task loss: "
+            f"{l_old_ref:.4f} → {l_old_post:.4f} "
+            f"(delta={l_old_post - l_old_ref:+.4f})"
+        )
+
+    net.train(was_training)
+    return history
+
+
+def apply_htr(optimizer, delta_theta: torch.Tensor, grad_pre: torch.Tensor):
+    """
+    Historical Trajectory Reuse (HTR) from COST paper.
+
+    Modulates the Adam optimizer's momentum state after teleportation based
+    on the alignment between the teleportation direction and the pre-teleport
+    gradient. This prevents stale momentum from misleading post-teleport training.
+
+    σ = cos_sim(Δθ, g')
+    v_t ← σ β₁ v_{t-1} + (1 - σ β₁) g_t   (first moment)
+    s_t ← σ β₂ s_{t-1} + (1 - σ β₂) g_t²   (second moment)
+
+    Args:
+        optimizer:    the model's Adam-style optimizer (modifies in-place)
+        delta_theta:  flattened teleportation displacement (θ' - θ)
+        grad_pre:     flattened gradient at pre-teleportation point
+    """
+    sigma = F.cosine_similarity(
+        delta_theta.unsqueeze(0), grad_pre.unsqueeze(0)
+    ).clamp(-1, 1).item()
+
+    for group in optimizer.param_groups:
+        beta1 = group.get('betas', (0.9, 0.999))[0]
+        beta2 = group.get('betas', (0.9, 0.999))[1]
+        for p in group['params']:
+            if p in optimizer.state:
+                state = optimizer.state[p]
+                if 'exp_avg' in state:
+                    state['exp_avg'].mul_(sigma * beta1)
+                if 'exp_avg_sq' in state:
+                    state['exp_avg_sq'].mul_(sigma * beta2)
+
+    logging.info(f"[Teleport-HTR] σ={sigma:.3f} — momentum modulated.")
+
+
+# ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------
 
@@ -393,6 +656,17 @@ def add_teleportation_args(parser) -> None:
     group.add_argument('--teleport_lr', type=float, default=0.01,
                        help='Learning rate for the scaling-factor optimiser.')
     group.add_argument('--teleport_reg', type=float, default=0.1,
-                       help='L2 regularisation on log(t).')
+                       help='L2 regularisation on log(t) (used in scaling mode only).')
     group.add_argument('--teleport_memory_per_task', type=int, default=256,
                        help='Samples stored per task for teleportation gradient computation.')
+    group.add_argument('--teleport_mode', type=str, default='scaling',
+                       choices=['scaling', 'lora'],
+                       help='Teleportation mode: "scaling" (ReLU symmetry) or "lora" (COST-style).')
+    group.add_argument('--teleport_lora_rank', type=int, default=4,
+                       help='LoRA rank for COST-style teleportation.')
+    group.add_argument('--teleport_gamma', type=float, default=1.0,
+                       help='Weight γ for sharpness objective in LoRA mode.')
+    group.add_argument('--teleport_sharpness_radius', type=float, default=0.05,
+                       help='Perturbation radius δ for sharpness estimation in LoRA mode.')
+    group.add_argument('--teleport_htr', type=int, default=0, choices=[0, 1],
+                       help='Enable Historical Trajectory Reuse (HTR) after LoRA teleportation.')

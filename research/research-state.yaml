@@ -1,0 +1,55 @@
+project: teleport-cl
+question: "能否用 Symmetry Teleportation (COST 方法) 减少 CL 中的灾难性遗忘？"
+started: 2026-04-14
+
+phase: inner_loop
+current_hypothesis: H1
+
+hypotheses:
+  H1:
+    name: "COST-CL：LoRA teleportation for CL"
+    status: implementing  # pending / implementing / running / done
+    prediction: "均值 Class-IL > 45.64%，多 seed 稳定"
+    method: |
+      - LoRA rank=4 附在 shared backbone 的 Linear/Conv 层
+      - 目标：L_lora = L_t - γ * L_g
+        - L_t = mean(|L_old(θ+Δθ) - L_old(θ)|)  on old task memory
+        - L_g = sharpness proxy on new task data (random perturbation)
+      - 触发：每个任务 t>=1 的训练前
+      - merge LoRA 后 commit 到网络，不改变推理结构
+    result: null
+
+  H2:
+    name: "HTR 策略"
+    status: pending
+    depends_on: H1
+    prediction: "H1基础上 +1~2%"
+    result: null
+
+  H3:
+    name: "触发条件：冲突检测"
+    status: pending
+    depends_on: H1
+    result: null
+
+baselines:
+  no_teleport_multi_seed:
+    config: "ER, seq-cifar10, n_epochs=1, buffer=500, lr=0.1"
+    seeds: [42, 1, 2, 3]
+    class_il: [43.71, 45.83, 45.96, 47.04]
+    mean: 45.64
+    std: 1.34
+
+next_steps:
+  - "实现 COST-CL teleportation 到 utils/teleportation.py"
+  - "在 utils/training.py 中集成新版 teleportation"
+  - "跑 H1 实验：seeds 42/1/2/3，记录结果"
+
+key_files:
+  - utils/teleportation.py   # teleportation 核心实现
+  - utils/training.py        # 训练循环集成点
+  - research/findings.md     # 研究叙事
+  - research/research-state.yaml  # 本文件
+
+literature:
+  - research/literature/COST_2503.04046.md
