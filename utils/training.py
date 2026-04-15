@@ -114,7 +114,7 @@ def train_single_epoch(model: ContinualModel,
                 and getattr(args, 'teleport', 0)
                 and getattr(args, 'teleport_mode', 'scaling') == 'online'
                 and hasattr(model, '_teleport_memory')
-                and len(model._teleport_memory.data) >= 1):
+                and len(model._teleport_memory.data) >= 2):
             # i is already incremented above at the end of loop body — use model.task_iteration
             _online_step = getattr(model, '_teleport_online_step', 0) + 1
             model._teleport_online_step = _online_step
@@ -138,7 +138,12 @@ def train_single_epoch(model: ContinualModel,
                         f"(threshold={threshold})"
                     )
                     if cos_val < threshold:
-                        teleport_lora_online(
+                        _teleport_count = getattr(model, '_teleport_trigger_count', 0) + 1
+                        model._teleport_trigger_count = _teleport_count
+                        logging.info(
+                            f"[Teleport-Online] Triggered #{_teleport_count} at step={_online_step} cos_sim={cos_val:.4f} < threshold={threshold}"
+                        )
+                        teleport_history = teleport_lora_online(
                             net=model.net,
                             batch_new=(inputs, labels),
                             old_dataloader=old_loader,
@@ -150,6 +155,13 @@ def train_single_epoch(model: ContinualModel,
                             lora_rank=getattr(args, 'teleport_lora_rank', 2),
                             device=model.device,
                         )
+                        if teleport_history['cos_sim']:
+                            final_cos = teleport_history['cos_sim'][-1]
+                            final_lt = teleport_history['lt'][-1]
+                            cos_improve = final_cos - cos_val
+                            logging.info(
+                                f"[Teleport-Online] Completed #{_teleport_count}: final_cos={final_cos:.4f} final_lt={final_lt:.6f} cos_improve={cos_improve:+.4f}"
+                            )
 
         if scheduler is not None and args.scheduler_mode == 'iter':
             scheduler.step()

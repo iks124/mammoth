@@ -905,6 +905,11 @@ def teleport_lora_online(net: nn.Module,
             dn = sum((lp['B'] @ lp['A']).norm().item() for lp in lora_list)
         history['delta_norm'].append(dn)
 
+        # 记录训练过程指标
+        logging.debug(
+            f"[Teleport-Online] step={_step} cos_sim={cos_sim_val:.4f} lt={lt:.6f} delta_norm={dn:.4f}"
+        )
+
         opt_lora.zero_grad()
         total_loss.backward()
         opt_lora.step()
