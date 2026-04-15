@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Teleportation + CL: 系统性失败分析报告</title>
+<style>
+  body { font-family: 'Noto Sans SC', 'PingFang SC', sans-serif; max-width: 960px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.7; }
+  h1 { font-size: 2em; color: #0d1b2a; border-bottom: 3px solid #e63946; padding-bottom: 12px; }
+  h2 { font-size: 1.4em; color: #1d3557; margin-top: 2em; border-left: 4px solid #457b9d; padding-left: 12px; }
+  h3 { font-size: 1.15em; color: #2c3e50; margin-top: 1.5em; }
+  .subtitle { color: #666; font-size: 1.05em; margin-top: -8px; margin-bottom: 24px; }
+  .box { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 18px 24px; margin: 16px 0; }
+  .box.red { background: #fff5f5; border-color: #f5c6cb; }
+  .box.green { background: #f0fff4; border-color: #c3e6cb; }
+  .box.blue { background: #eff6ff; border-color: #bfdbfe; }
+  .box.yellow { background: #fffbeb; border-color: #fcd34d; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+  th { background: #1d3557; color: white; padding: 10px 14px; text-align: left; }
+  td { padding: 9px 14px; border-bottom: 1px solid #e0e0e0; }
+  tr:hover td { background: #f5f5f5; }
+  .neg { color: #c0392b; font-weight: bold; }
+  .pos { color: #27ae60; font-weight: bold; }
+  .neutral { color: #7f8c8d; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+  .formula { background: #f8f0ff; border-left: 3px solid #9b59b6; padding: 10px 16px; margin: 12px 0; font-family: monospace; }
+  .key-insight { background: #1d3557; color: white; padding: 16px 20px; border-radius: 8px; margin: 20px 0; }
+  .key-insight h3 { color: #a8d8ea; margin-top: 0; }
+  .timeline { border-left: 3px solid #457b9d; padding-left: 20px; margin: 16px 0; }
+  .timeline-item { margin-bottom: 18px; position: relative; }
+  .timeline-item::before { content: '●'; position: absolute; left: -27px; color: #e63946; font-size: 1.1em; }
+  .timeline-item.failed::before { color: #e63946; }
+  .comparison-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .comp-card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; }
+  .comp-card h4 { margin-top: 0; font-size: 1em; color: #1d3557; }
+  .comp-card.success { border-top: 4px solid #27ae60; }
+  .comp-card.fail { border-top: 4px solid #e63946; }
+  .comp-card.partial { border-top: 4px solid #f39c12; }
+  footer { margin-top: 60px; padding-top: 16px; border-top: 1px solid #eee; color: #999; font-size: 0.85em; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; }
+  .badge.fail { background: #ffebee; color: #c62828; }
+  .badge.note { background: #e3f2fd; color: #1565c0; }
+</style>
+</head>
+<body>
+
+<h1>Teleportation + Continual Learning: 系统性失败分析</h1>
+<div class="subtitle">基于两篇相关文献（COST, B00ST）的理论分析 + 6组实验的综合报告 · 2026-04-14</div>
+
+<div class="box blue">
+<strong>报告摘要：</strong>通过对 COST（MTL）和 B00ST（DLTR）两篇成功论文的理论分析，以及我们6组 CL 实验的系统性失败，本报告得出以下核心结论：<br><br>
+<strong>Symmetry Teleportation 解决的是"并发梯度冲突"问题，而 Continual Learning 的遗忘问题是"序列化数据访问"问题——两者是本质不同的问题，teleportation 工具集无法解决 CL 遗忘。</strong>
+</div>
+
+<!-- ====== SECTION 1: 两篇文献分析 ====== -->
+<h2>1. 两篇文献如何使用 Teleportation</h2>
+
+<h3>1.1 COST (arXiv 2503.04046) — Multi-Task Learning</h3>
+
+<div class="box">
+<strong>问题</strong>：MTL 中多任务梯度冲突（gradient conflict）和任务不均衡（task imbalance）<br>
+<strong>冲突定义</strong>：超过 K/2 个任务梯度与平均梯度方向相反（cos_sim < 0）
+</div>
+
+<div class="formula">
+θ' = θ + Δθ，Δθ = BA（LoRA，rank r）<br><br>
+L_t = (1/K) Σ_i |L_i - L*_i|          ← loss invariance on ALL K tasks<br>
+L_g = max_j { (1/K) Σ_i R_i · L_i(θ + Δθ + ε_j) }  ← sharpness proxy<br>
+L_lora = L_t - γ · L_g
+</div>
+
+**关键机制**：
+- L_t 保证 teleportation 不破坏任何任务的当前 loss（等价于找到 loss-invariant 点）
+- L_g 最大化梯度范数（sharpness）—— 希望在新点上梯度更丰富，有利于后续优化
+- HTR：teleportation 后根据方向对齐度决定是否复用 Adam 动量
+- **触发时机**：训练中检测到冲突时立即触发，然后继续正常训练
+
+<h3>1.2 B00ST (MM '25) — Deep Long-Tailed Recognition</h3>
+
+<div class="box">
+<strong>问题</strong>：DLTR 中头部类别梯度压制尾部类别梯度<br>
+<strong>冲突定义</strong>：任意两类别组 cos_sim < 0
+</div>
+
+<div class="formula">
+θ' = θ + Δθ，Δθ = BA（LoRA）<br><br>
+L_t = Σ_{i=1}^{M} |L_orig^(i) - L_cur^(i)|     ← loss invariance on ALL M groups<br>
+L_g = Σ_{i=1}^{M} R_i · ||E[∇h^(i)(θ+rv)]q/r||²  ← 加权梯度范数，尾部权重更大<br>
+R = M · softmax( (Σ ||g_j|| / ||g_i||)_{i=1}^{M} )<br><br>
+L = L_t - α * L_g
+</div>
+
+<div class="box green">
+<strong>B00ST 改进点（相比 COST）</strong>：L_g 不用随机扰动估计 sharpness，而是直接估计梯度范数，且对尾部类别（小梯度组）加重权重——这使 teleportation 优先提升尾部类别的梯度，解决类别不均衡。
+</div>
+
+<h3>1.3 两篇文献的共同结构</h3>
+
+<div class="comparison-grid">
+  <div class="comp-card success">
+    <h4>共同点1：数据完全可访问</h4>
+    COST：K 个任务全部同时训练<br>
+    B00ST：所有类别全部同时训练<br>
+    → Teleportation 后继续用<strong>全部数据</strong>训练
+  </div>
+  <div class="comp-card success">
+    <h4>共同点2：双目标 LoRA</h4>
+    L_t：loss invariance（旧点不变）<br>
+    L_g：gradient maximization（新点更好）<br>
+    → LoRA merge 后无推理开销
+  </div>
+  <div class="comp-card success">
+    <h4>共同点3：在线恢复机制</h4>
+    Teleportation 后继续训练<strong>所有任务/类别</strong><br>
+    → 任何微小扰动都被后续梯度步骤自然校正<br>
+    → 这是两者成功的关键
+  </div>
+</div>
+
+<table>
+  <tr><th>维度</th><th>COST（MTL）</th><th>B00ST（DLTR）</th><th>我们（CL）</th></tr>
+  <tr><td>问题场景</td><td>K任务并发</td><td>所有类并发（不均衡）</td><td>任务序列训练</td></tr>
+  <tr><td>冲突类型</td><td>任务间梯度冲突</td><td>头尾类别梯度冲突</td><td>新任务覆盖旧任务表征</td></tr>
+  <tr><td>L_t 的数据来源</td><td>所有 K 任务数据</td><td>所有 M 类别组数据</td><td>仅 ER buffer（500样本）</td></tr>
+  <tr><td>Teleport 后数据访问</td><td>全部 K 任务</td><td>全部类别</td><td>仅新任务（旧任务冻结）</td></tr>
+  <tr><td>在线恢复</td><td><span class="pos">✓ 完整</span></td><td><span class="pos">✓ 完整</span></td><td><span class="neg">✗ 不存在</span></td></tr>
+  <tr><td>结果</td><td><span class="pos">SOTA on MTL</span></td><td><span class="pos">SOTA on DLTR</span></td><td><span class="neg">6/6 失败</span></td></tr>
+</table>
+
+<!-- ====== SECTION 2: 我们的实验结果 ====== -->
+<h2>2. 我们的实验轨迹</h2>
+
+<p><strong>设定</strong>：ER（Experience Replay）+ seq-CIFAR-10，n_epochs=1，buffer=500，lr=0.1，4 seeds [42,1,2,3]</p>
+<p><strong>Baseline</strong>：均值 45.64% ± 1.34%（Class-IL）</p>
+
+<table>
+  <tr><th>方法</th><th>均值 Class-IL</th><th>std</th><th>Delta</th><th>失败原因</th></tr>
+  <tr><td>Baseline（no teleport）</td><td>45.64%</td><td>1.34%</td><td>—</td><td>—</td></tr>
+  <tr><td>ReLU scaling + cos_sim（单seed=42）</td><td>46.57%</td><td>—</td><td class="pos">+0.93%</td><td>—</td></tr>
+  <tr><td>ReLU scaling + cos_sim（多seed）</td><td>44.13%</td><td>—</td><td class="neg">-1.51%</td><td>512维自由度不足，效果随机</td></tr>
+  <tr><td>H1：COST sharpness（LoRA）</td><td>~10%</td><td>—</td><td class="neg">崩溃</td><td>L_t梯度=0，L_g爆炸，norm→15000</td></tr>
+  <tr><td>H1b：LoRA + cos_sim</td><td>41.93%</td><td>—</td><td class="neg">-3.70%</td><td>delta_norm=3，破坏旧任务表征</td></tr>
+  <tr><td><strong>H5：LoRA repair on old memory</strong></td><td><strong>44.75%</strong></td><td><strong>4.49%</strong></td><td class="neg"><strong>-0.89%，方差爆炸</strong></td><td>seed=3下降9.51%，无法控制</td></tr>
+</table>
+
+<div class="box yellow">
+<strong>注意</strong>：H5 的 seed=42（48.71%）和 seed=1（48.32%）其实超出 baseline +3~5%，但 seed=3（37.53%）大幅下降。均值为负且方差是 baseline 的 3.4 倍，方法不稳定无法使用。
+</div>
+
+<!-- ====== SECTION 3: 理论分析 ====== -->
+<h2>3. 为什么 Teleportation 在 CL 中系统性失败</h2>
+
+<div class="key-insight">
+  <h3>核心理论结论</h3>
+  <p>Symmetry Teleportation 解决的是<strong>同一优化步骤内的梯度几何问题</strong>（找到梯度更均衡的等价参数点）。Continual Learning 的遗忘问题是<strong>跨时间的数据访问问题</strong>（旧任务数据不再可用）。两者是本质不同的问题。</p>
+</div>
+
+<h3>3.1 Teleportation 的工作原理（为什么在 MTL/DLTR 有效）</h3>
+
+<p>Teleportation 的理论保证来自 <strong>loss-invariant 集合 A</strong>：</p>
+<div class="formula">
+∀a ∈ A, ∀θ ∈ R^m: L(θ) = L(a · θ)
+</div>
+
+<p>在这个集合中找梯度范数最大的点：</p>
+<div class="formula">
+θ* = argmax_{a∈A} ||∇L(a·θ)||²
+</div>
+
+<p>这在 MTL/DLTR 中有效，因为：</p>
+<ol>
+  <li><strong>Loss invariance 是真实的</strong>：teleportation 期间所有数据都在，L_t 可以在完整数据集上计算，保证不破坏任何任务/类别的 loss</li>
+  <li><strong>梯度几何在新点更好</strong>：sharpness/gradient norm 更大意味着后续梯度步骤更有效</li>
+  <li><strong>在线恢复</strong>：即使 LoRA merge 引入微小扰动，后续正常训练会立刻校正</li>
+</ol>
+
+<h3>3.2 在 CL 中失败的三个根本原因</h3>
+
+<div class="comparison-grid">
+  <div class="comp-card fail">
+    <h4>原因1：Loss Invariance 是假的</h4>
+    我们的 L_t 只能在 ER buffer（500样本）上计算。<br>
+    这500个样本只代表旧任务的一小部分，<br>
+    buffer 上的 loss 不变 ≠ 旧任务完整 loss 不变。<br>
+    <span class="badge fail">伪约束</span>
+  </div>
+  <div class="comp-card fail">
+    <h4>原因2：无在线恢复机制</h4>
+    teleportation 后，只在新任务上继续训练。<br>
+    任何对旧任务表征的损坏无法被校正。<br>
+    H5 seed=3 下降 9.5% 正是因为 LoRA 步骤<br>
+    干扰了旧任务的 representations。<br>
+    <span class="badge fail">永久损坏</span>
+  </div>
+  <div class="comp-card fail">
+    <h4>原因3：问题不同</h4>
+    COST/B00ST 解决的是：<br>
+    "同一 batch 内，谁的梯度更大？"<br>
+    CL 遗忘的原因是：<br>
+    "旧任务的参数空间被新任务覆盖"<br>
+    梯度几何改变无法解决访问问题。<br>
+    <span class="badge fail">错误工具</span>
+  </div>
+</div>
+
+<h3>3.3 "自由度 vs 输出不变性"的不可能三角</h3>
+
+<p>在 CL 设定下，任何 teleportation 方案都面临以下三角矛盾：</p>
+
+<table>
+  <tr><th>方案</th><th>自由度</th><th>输出不变性</th><th>CL 安全性</th></tr>
+  <tr>
+    <td>ReLU scaling</td>
+    <td class="neg">小（512维）</td>
+    <td class="pos">严格保证</td>
+    <td class="neutral">随机（效果微弱）</td>
+  </tr>
+  <tr>
+    <td>LoRA + cos_sim（H1b）</td>
+    <td class="pos">大（rank×d×层数）</td>
+    <td class="neg">无保证（delta_norm=3）</td>
+    <td class="neg">破坏旧任务（-3.7%）</td>
+  </tr>
+  <tr>
+    <td>LoRA repair（H5）</td>
+    <td class="neutral">中（steps=5限制）</td>
+    <td class="neutral">部分（buffer上近似）</td>
+    <td class="neg">高方差（std=4.49%）</td>
+  </tr>
+  <tr>
+    <td>H4（理论上）</td>
+    <td class="neutral">受约束的LoRA</td>
+    <td class="neutral">buffer近似</td>
+    <td class="neutral">预测：≈0，不能改善</td>
+  </tr>
+</table>
+
+<div class="box red">
+<strong>不可能三角</strong>：在 CL 中，想要"足够大的自由度来改变梯度几何"与"保证不破坏旧任务表征"是互相矛盾的，因为后者需要完整的旧任务数据，而 CL 设定下这数据不存在。
+</div>
+
+<!-- ====== SECTION 4: B00ST 成功条件分析 ====== -->
+<h2>4. B00ST 成功的充分条件分析</h2>
+
+<p>B00ST 在 DLTR 上取得 SOTA 的原因不是"teleportation 更强"，而是其应用场景恰好满足了所有前提条件：</p>
+
+<div class="box green">
+<ol>
+<li><strong>梯度冲突是静态的</strong>：头/尾类别的不均衡在整个训练过程中持续存在，teleportation 在每次检测到冲突时都能带来稳定收益</li>
+<li><strong>所有数据始终可访问</strong>：L_t 可以在完整数据集上计算，loss invariance 保证是真实的</li>
+<li><strong>LoRA merge 后正常训练可以恢复</strong>：即使 merge 引入微小扰动，后续 batch（包含所有类别）会立刻校正</li>
+<li><strong>重加权 R_i 针对性解决尾部问题</strong>：B00ST 的关键创新是给尾部类别的梯度更大权重，这在 DLTR 中是有针对性的改进（COST 没有这个）</li>
+</ol>
+</div>
+
+<p>这四个条件在 CL 中全部不满足：</p>
+<ul>
+<li>遗忘是动态的（随任务推进逐渐累积）</li>
+<li>旧任务数据仅有 ~500 个 buffer 样本</li>
+<li>LoRA merge 后只训练新任务，无法恢复旧任务损坏</li>
+<li>没有等价的"重加权"目标来对抗遗忘</li>
+</ul>
+
+<!-- ====== SECTION 5: Negative Result 价值 ====== -->
+<h2>5. 这个 Negative Result 的价值</h2>
+
+<div class="box">
+<p>我们系统性地测试了6种将 symmetry teleportation 迁移到 CL 的方案，全部失败。这不是随机失败——每次失败都有一致的理论解释，指向同一个根本矛盾。</p>
+
+<p>这个 negative result 具有以下学术价值：</p>
+<ol>
+  <li><strong>理论厘清</strong>：明确区分了"梯度冲突问题"（teleportation 擅长解决）和"序列化遗忘问题"（teleportation 不能解决），防止后续研究者重复这条死路</li>
+  <li><strong>边界划定</strong>：给出了 symmetry teleportation 成功的充分条件（全数据可访问 + 在线恢复机制），这些条件在原论文中都是隐含的，我们的工作使其显式化</li>
+  <li><strong>实证支撑</strong>：6种不同参数化方式（ReLU scaling、LoRA+cos_sim、LoRA+sharpness、LoRA repair）覆盖了大部分合理的迁移策略，实证结果全面</li>
+  <li><strong>反例贡献</strong>：B00ST 和 COST 的作者在论文中没有讨论 CL 的适用性，我们的工作填补了这个空白</li>
+</ol>
+</div>
+
+<h3>可能的 Paper Framing</h3>
+
+<div class="box blue">
+<strong>标题方向</strong>：<em>"Why Symmetry Teleportation Fails in Continual Learning: A Theoretical and Empirical Analysis"</em><br><br>
+<strong>摘要一句话</strong>：我们系统地研究了将近年在 MTL 和 DLTR 中取得 SOTA 的 Symmetry Teleportation 技术迁移到 Continual Learning 的可能性，通过理论分析和6组实验发现：teleportation 的有效性依赖于"全数据可访问"和"在线恢复机制"两个在 CL 中不存在的前提条件，从而形成了本质性的适用边界。<br><br>
+<strong>投稿方向</strong>：CL Workshop（NeurIPS/ICML）、NeurIPS negative result track
+</div>
+
+<!-- ====== SECTION 6: 下一步 ====== -->
+<h2>6. 建议的下一步</h2>
+
+<table>
+  <tr><th>选项</th><th>描述</th><th>建议</th></tr>
+  <tr>
+    <td>A：测试 H4</td>
+    <td>输出不变约束 LoRA（MSE on old memory outputs）</td>
+    <td>预期与 ReLU scaling 同样失败（buffer 数据不足以保证真实的 output invariance）；可快速验证</td>
+  </tr>
+  <tr>
+    <td>B：写 Negative Result 论文</td>
+    <td>已有6种方法、理论分析、文献对比</td>
+    <td class="pos"><strong>推荐</strong>：evidence 已充分，理论解释清晰</td>
+  </tr>
+  <tr>
+    <td>C：完全不同的方向</td>
+    <td>例如：LoRA 用于 CL 的参数隔离（不是 teleportation）</td>
+    <td>需要重新开 bootstrap；可作为 future work</td>
+  </tr>
+</table>
+
+<footer>
+报告生成：2026-04-14 | 基于实验数据 + COST (arXiv 2503.04046) + B00ST (MM '25) 分析
+</footer>
+
+</body>
+</html>

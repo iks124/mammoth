@@ -68,7 +68,14 @@ hypotheses:
       teleport_lr: 1e-3
       teleport_reg: 0.01
       teleport_lt_weight: 1.0
-    result: null
+    result:
+      seeds: [42, 1, 2, 3]
+      class_il: [53.96, 48.51, 41.57, 44.15]
+      mean: 47.05
+      std: 5.43
+      delta_vs_baseline: +1.41%
+      verdict: "正均值，但方差爆炸（5.43% vs 1.34%）。与 H5 相同的高方差失败模式。需要减少 teleportation 频率/幅度。"
+    status: done
 
 baselines:
   no_teleport_multi_seed:

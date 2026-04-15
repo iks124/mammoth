@@ -109,6 +109,29 @@
 
 ---
 
+### ⚠️ H6：Online Gradient Conflict Detection + Teleportation — 混合结果
+
+**结果（4 seed）：** seed=42: 53.96%, seed=1: 48.51%, seed=2: 41.57%, seed=3: 44.15%  
+**均值 47.05%（+1.41%），std=5.43%（vs baseline 1.34%）**
+
+**关键观察：**
+- 这是首次有方法产生正均值且 seed=42 提升 +10%
+- 但方差从 1.34% 爆炸到 5.43%，与 H5 模式相同
+- Teleportation 被频繁触发（6次/epoch），delta_norm≈0.3-0.5，累积改变量大
+- 部分事件 cos_sim 改善明显（-0.287→-0.027），但仍未达正值
+
+**机制分析：**
+- Online teleportation 克服了漏洞5（训练轨迹覆盖）
+- 但带来了新问题：频繁的小步 LoRA 扰动在某些 seed 下破坏训练动态
+- 根本相同：修改参数在 CL 中无法自恢复，随机种子决定的任务序列/初始化决定成败
+
+**与 H5 的对比：**
+- H5（task-boundary LoRA repair）：均值 44.75%（-0.89%），std=4.49%
+- H6（online LoRA teleport）：均值 47.05%（+1.41%），std=5.43%
+- H6 均值更好，但方差更大。两者都有"高 seed 方差"问题。
+
+---
+
 ## Experiment Trajectory
 
 | Exp ID | 方法 | 均值 Class-IL（4 seed） | delta |
@@ -120,3 +143,4 @@
 | H1b LoRA+cos_sim | LoRA+cos_sim | 41.93% | **-3.70%** |
 | H5 conservative | LoRA repair old (reg=1.0,steps=5) | 44.75%±4.49% | **-0.89%，高方差** |
 | H4 (planned) | constrained LoRA+output invariance | — | — |
+| H6 online teleport | online LoRA+cos_sim+L_t (k=50,steps=5,rank=2) | 47.05%±5.43% | **+1.41%，但高方差** |
