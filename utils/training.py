@@ -122,22 +122,44 @@ def train_single_epoch(model: ContinualModel,
 
             if _online_step % check_freq == 0:
                 from utils.teleportation import detect_gradient_conflict, teleport_lora_online
-                old_loader = model._teleport_memory.get_old_dataloader(batch_size=32)
-                if old_loader is not None:
+                # Maintain a persistent iterator over old samples.
+                # Each epoch exhaustion triggers a fresh iter() call, which re-shuffles
+                # the DataLoader so different epochs see different random orderings.
+                # Reset entirely when the number of stored tasks changes.
+                _n_tasks = len(model._teleport_memory.data)
+                if (not hasattr(model, '_old_loader_iter')
+                        or getattr(model, '_old_loader_n_tasks', -1) != _n_tasks):
+                    _ol = model._teleport_memory.get_old_dataloader(batch_size=32)
+                    model._old_loader_base = _ol
+                    model._old_loader_iter = iter(_ol) if _ol is not None else None
+                    model._old_loader_n_tasks = _n_tasks
+
+                if model._old_loader_iter is not None:
+                    try:
+                        _old_batch = next(model._old_loader_iter)
+                    except StopIteration:
+                        # Epoch exhausted — re-shuffle and start a new epoch
+                        model._old_loader_iter = iter(model._old_loader_base)
+                        _old_batch = next(model._old_loader_iter)
+
+                if model._old_loader_iter is not None:
                     cos_val = detect_gradient_conflict(
                         net=model.net,
                         batch_new=(inputs, labels),
-                        old_dataloader=old_loader,
+                        batch_old=_old_batch,
                         loss_fn=model.loss,
                         device=model.device,
                         approx_layers=getattr(args, 'teleport_approx_layers', 2),
                     )
                     threshold = getattr(args, 'teleport_conflict_threshold', 0.0)
-                    logging.debug(
-                        f"[Teleport-Online] step={_online_step} cos_sim={cos_val:.4f} "
-                        f"(threshold={threshold})"
+                    _n_tasks_now = len(model._teleport_memory.data)
+                    # Always log cos_sim at INFO level for hypothesis verification (H8)
+                    logging.info(
+                        f"[Teleport-Detect] task={_n_tasks_now - 1} step={_online_step} "
+                        f"cos_sim={cos_val:.4f} threshold={threshold}"
                     )
-                    if cos_val < threshold:
+                    _detect_only = getattr(args, 'teleport_detect_only', False)
+                    if not _detect_only and cos_val < threshold:
                         _teleport_count = getattr(model, '_teleport_trigger_count', 0) + 1
                         model._teleport_trigger_count = _teleport_count
                         logging.info(
@@ -146,7 +168,7 @@ def train_single_epoch(model: ContinualModel,
                         teleport_history = teleport_lora_online(
                             net=model.net,
                             batch_new=(inputs, labels),
-                            old_dataloader=old_loader,
+                            batch_old=_old_batch,
                             loss_fn=model.loss,
                             n_steps=getattr(args, 'teleport_online_steps', 5),
                             lr_lora=getattr(args, 'teleport_lr', 1e-3),

@@ -5,7 +5,7 @@ Can mid-training gradient conflict detection + LoRA teleportation reduce catastr
 in continual learning, specifically by finding loss-equivalent parameter configurations with better
 gradient alignment between old and new tasks?
 
-## Current Understanding (2026-04-16) — H7 COMPLETE
+## Current Understanding (2026-04-16) — H8 COMPLETE → CONCLUDE
 
 ### Complete Results
 
@@ -85,9 +85,52 @@ Only merge if both: (a) lt < 0.1 AND (b) cos_sim actually improved.
 Filter out bad teleports. Roughly 5% of events would pass. Very few merges = little disruption.
 But: is this enough to help? Unclear.
 
-## Decision: PIVOT
+**→ All options deprioritized given H8 finding: the fundamental hypothesis is not confirmed.**
 
-Online teleport does not work. The theoretical flaws (Flaw 5: zero-order ≠ trajectory) are
-confirmed experimentally. Recommend pivoting to either:
-1. Investigating why H6b (task-boundary) is neutral
-2. Verifying the gradient conflict → forgetting hypothesis itself
+## H8: Gradient Conflict → Forgetting Hypothesis Verification (2026-04-16)
+
+### Setup
+- Detection-only mode (teleport_detect_only=1, threshold=100 → never triggers)
+- Logged cos_sim at every check (freq=10) for 3 seeds × seq-cifar10
+- Correlated mean cos_sim per task with per-task forgetting
+
+### Key Results
+
+**Gradient conflict is ubiquitous: 78.9% of all training steps have cos_sim < 0**
+
+| Seed | r(cos_sim, forgetting) | Cross-task r |
+|------|----------------------|--------------|
+| 42   | -0.43                | -0.73        |
+| 123  | -0.01                | -0.32        |
+| 456  | -0.54                | +0.08        |
+| **Pooled** | **-0.25**   | —            |
+
+### Critical Finding
+The hypothesis is **NOT confirmed**. The mean cos_sim per task ranges from only -0.13 to -0.30
+(17 unit range) across all tasks — there's insufficient variance to detect a causal signal.
+More importantly: if 79% of steps have gradient conflict, it's a background property of
+multi-task gradient mixing, not a discriminating event. The correlation is inconsistent across
+seeds and largely driven by task-order confound (last task always has zero forgetting).
+
+### Verdict
+The "gradient conflict causes forgetting" hypothesis is **not confirmable** with single-step
+mini-batch cos_sim as the proxy. The signal-to-noise ratio is too low and the measurement
+granularity is wrong. Conflict is ubiquitous, not selective.
+
+---
+
+## Decision: CONCLUDE
+
+The research programme is complete. The results form a coherent set of negative findings:
+
+1. **H6b/H7 (Online teleport)**: Fundamentally broken. Flaw 5 confirmed — zero-order guarantee
+   at one batch ≠ trajectory invariance. No viable hyperparameter regime with rank-2 LoRA.
+
+2. **H8 (Hypothesis verification)**: Gradient conflict is ubiquitous (79% of steps). The proxy
+   (mini-batch cos_sim) has insufficient discriminating power. The hypothesis is not confirmed.
+
+**Conclusion**: LoRA teleportation designed around mini-batch gradient alignment cannot reduce
+catastrophic forgetting in this form. The approach is solving the wrong problem at the wrong
+granularity.
+
+**Coherent negative result** — publishable as a rigorous study of what doesn't work and why.
