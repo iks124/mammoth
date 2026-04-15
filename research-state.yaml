@@ -1,0 +1,72 @@
+project: Online Teleportation for Continual Learning
+question: >
+  Can mid-training gradient conflict detection + LoRA teleportation reduce
+  catastrophic forgetting in continual learning by finding loss-equivalent
+  parameter configurations with better gradient alignment?
+
+phase: pivot
+status: planning_H8
+
+last_updated: 2026-04-16
+
+# ──────────────────────────────────────────────
+# Results summary
+# ──────────────────────────────────────────────
+baselines:
+  ER_10ep: 58.53%
+  ER_50ep: 61.66%
+
+experiments:
+  H6b_threshold_sweep:
+    best: "threshold=-0.3 → 45.49% (-0.15% vs ER_10ep), std=0.74%"
+    verdict: neutral_stable
+  H7_online_freq:
+    best: "E5 freq=10 lt_weight=50 → 56.90% (-1.63%)"
+    worst: "E1 freq=1 → 26.93% (-31.60%)"
+    verdict: fundamentally_broken
+    root_cause: >
+      Flaw 5: zero-order loss invariance at one batch ≠ trajectory invariance.
+      High lt_weight forces large delta_norm (25-30), catastrophically disrupting
+      other batches. No viable middle ground with rank-2 LoRA in 5-20 steps.
+
+trigger_analysis_correction:
+  note: >
+    Earlier analysis misread "all triggers in steps 1-3130" as "triggers only in task 2."
+    The step counter resets to 0 at every task boundary (training.py:333).
+    Actual distribution: 850 triggers spread uniformly across 4 eligible tasks
+    (~212 per task). No implementation bug — purely a log-interpretation error.
+
+# ──────────────────────────────────────────────
+# Pivot decision
+# ──────────────────────────────────────────────
+pivot_options:
+  A:
+    name: Task-boundary teleport improvement
+    description: Understand why H6b is neutral, push it positive
+    priority: medium
+  B:
+    name: Verify gradient conflict → forgetting hypothesis
+    description: >
+      Does gradient conflict actually CAUSE forgetting?
+      Run detection-only (threshold=100, never triggers) and log per-step
+      cos_sim; correlate with per-task forgetting.
+    priority: high  # foundational — if false, all teleport approaches are wrong
+  C:
+    name: SAM-style first-order approximation
+    description: >
+      Replace create_graph=True with weight perturbation.
+      g_approx = (g(θ + ε*sign(g)) - g(θ)) / ε
+      Much cheaper → more steps or higher rank.
+    priority: medium
+  D:
+    name: Conditional merge
+    description: >
+      Only merge if both: lt < 0.1 AND cos_sim improved.
+      ~5% of events pass. Very few merges = little disruption.
+    priority: low
+
+next_experiment: H8_hypothesis_verification
+next_experiment_goal: >
+  Verify whether gradient conflict (low cos_sim) correlates with eventual
+  per-task forgetting. This is the foundational hypothesis behind all
+  teleportation work. If false → fundamental pivot needed.
