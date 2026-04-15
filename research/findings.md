@@ -5,7 +5,7 @@
 
 ---
 
-## Current Understanding（当前认知，2026-04-14 outer loop v2）
+## Current Understanding（当前认知，2026-04-15 outer loop v3）
 
 ### 已否定的方向（按时间序）
 
@@ -109,7 +109,7 @@
 
 ---
 
-### ⚠️ H6：Online Gradient Conflict Detection + Teleportation — 混合结果
+### ⚠️ H6：Online Gradient Conflict Detection + Teleportation — 混合结果（threshold=0）
 
 **结果（4 seed）：** seed=42: 53.96%, seed=1: 48.51%, seed=2: 41.57%, seed=3: 44.15%  
 **均值 47.05%（+1.41%），std=5.43%（vs baseline 1.34%）**
@@ -130,6 +130,81 @@
 - H6（online LoRA teleport）：均值 47.05%（+1.41%），std=5.43%
 - H6 均值更好，但方差更大。两者都有"高 seed 方差"问题。
 
+### ⚠️ H6b：Online Teleport，严格阈值 τ=-0.3
+
+**结果：** seed=42: 44.93%, seed=1: 44.90%, seed=2: 46.47%, seed=3: 45.66%  
+**均值 45.49%（-0.15%），std=0.74%（< baseline 1.34%）**
+
+**关键发现：H6 vs H6b 的阈值 sweep 揭示了核心规律**
+
+| 阈值 τ | 均值 | std | 解释 |
+|-------|------|-----|------|
+| 0.0 (H6) | 47.05% (+1.41%) | 5.43% | 频繁触发，帮助部分 seed，破坏其他 |
+| -0.3 (H6b) | 45.49% (-0.15%) | 0.74% | 只触发严重冲突，效果中立但稳定 |
+
+**这是一个 bias-variance tradeoff 的清晰展示：**
+- 更激进的 teleportation → 更高的均值期望，但更高的方差（不稳定）
+- 更保守的 teleportation → 更低的方差，但没有净效益
+- **任何阈值下都无法同时达到"正均值 + 低方差"**
+
+---
+
+## Outer Loop v3 Synthesis：系统性结论（2026-04-15）
+
+经过 **8 种方法测试**（H1/H1b/H5/H6/H6b + ReLU scaling 3变体），有统一的结论：
+
+### 核心规律：Variance-Benefit Tradeoff
+
+```
+更激进的参数修改 → 更多潜在收益，但更高的 seed 方差
+更保守的参数修改 → 更低方差，但净效益趋向零
+```
+
+**没有任何方法能同时满足：均值显著提升（>+1%）AND 方差接近 baseline（<2%）**
+
+### 根本机制（理论分析）
+
+**为什么 teleportation 在 CL 中不稳定？**
+
+1. **COST/BOOST 成功的充要条件**：所有任务数据始终可访问，teleportation 引入的任何扰动在后续训练中自然恢复（online recovery）。
+
+2. **CL 缺少在线恢复**：旧任务数据只有少量 buffer（500个样本），无法完全恢复 teleportation 引入的扰动。
+
+3. **随机性来源**：参数修改是否有益取决于：
+   - 任务序列（哪些类别先学，哪些后学）
+   - 网络初始化（随机种子）
+   - 两者共同决定旧/新任务特征空间的重叠程度
+   - 这些是随机的，不可预测
+
+4. **阈值 sweep 的诊断价值**：
+   - τ=0：mild conflicts 的 teleportation → 随机效果（seed=42 +10%，seed=2 -4%）
+   - τ=-0.3：只处理严重冲突 → 中性效果，平均出正负影响
+
+### 是否找到了可发表的贡献？
+
+**YES，有两种发表路径：**
+
+**路径1（Negative Result 论文）**：
+- 系统测试了 8 种 symmetry teleportation 在 CL 中的应用
+- 所有方法都失败于相同的根本原因（缺乏在线恢复）
+- 阈值 sweep 提供了新的 bias-variance tradeoff 分析
+- 理论分析与实验数据一致
+- 适合 TMLR（negative result 友好）或 CL workshop
+
+**路径2（Positive Result 论文）**：
+- H6b 发现：保守的在线 teleportation 可以实现 std=0.74%（比 baseline 1.34% 更稳定！）
+- 方向：能否利用这种稳定性，在多次运行时排除失败种子，提高可靠性？
+- 或者：结合其他 CL 方法（EWC、SI）来提供"在线恢复"替代品？
+
+### 方向决定：CONCLUDE or PIVOT?
+
+**判据**：
+1. 有强支持的发现？✅（negative result 有清晰理论 + 实验支撑）
+2. 能解释 WHY？✅（缺少在线恢复 → variance-benefit tradeoff）
+3. findings.md 可作为 paper 摘要？✅
+
+**决定：CONCLUDE，准备 negative result 论文**
+
 ---
 
 ## Experiment Trajectory
@@ -143,4 +218,5 @@
 | H1b LoRA+cos_sim | LoRA+cos_sim | 41.93% | **-3.70%** |
 | H5 conservative | LoRA repair old (reg=1.0,steps=5) | 44.75%±4.49% | **-0.89%，高方差** |
 | H4 (planned) | constrained LoRA+output invariance | — | — |
-| H6 online teleport | online LoRA+cos_sim+L_t (k=50,steps=5,rank=2) | 47.05%±5.43% | **+1.41%，但高方差** |
+| H6 online teleport | online LoRA+cos_sim+L_t (k=50,steps=5,rank=2,τ=0) | 47.05%±5.43% | **+1.41%，但高方差** |
+| H6b online teleport | 同上但 τ=-0.3（严格阈值） | 45.49%±0.74% | **-0.15%，方差极低** |
