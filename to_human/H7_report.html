@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>H7 Online Teleport — 实验报告</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; color: #222; }
+  h1 { border-bottom: 3px solid #2563eb; padding-bottom: 12px; }
+  h2 { border-left: 4px solid #2563eb; padding-left: 12px; margin-top: 36px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th { background: #1e3a8a; color: white; padding: 10px 14px; text-align: left; }
+  td { padding: 9px 14px; border-bottom: 1px solid #e5e7eb; }
+  tr:hover td { background: #f0f9ff; }
+  .best { background: #d1fae5 !important; font-weight: bold; }
+  .worst { background: #fee2e2 !important; }
+  .baseline { background: #fef9c3 !important; font-weight: bold; }
+  .key-finding { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+  .flaw { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 16px 20px; margin: 20px 0; }
+  .chart { margin: 24px 0; }
+  .bar-container { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+  .bar-label { width: 180px; font-size: 13px; text-align: right; }
+  .bar { height: 24px; border-radius: 3px; display: flex; align-items: center; padding-left: 8px; color: white; font-size: 12px; font-weight: bold; }
+  .positive { background: #2563eb; }
+  .negative { background: #ef4444; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>H7: Online Teleport 实验报告</h1>
+<p><strong>日期</strong>: 2026-04-16 &nbsp;|&nbsp; <strong>数据集</strong>: seq-cifar10 (Class-IL) &nbsp;|&nbsp; <strong>模型</strong>: ER, buffer=500, lr=0.1, seed=42</p>
+
+<h2>完整结果表</h2>
+<table>
+  <tr><th>实验</th><th>check_freq</th><th>threshold</th><th>lt_weight</th><th>n_steps</th><th>epochs</th><th>Class-IL</th><th>Δ (vs E0-10)</th><th>触发数</th><th>avg_lt</th></tr>
+  <tr class="baseline"><td>E0-10ep (baseline)</td><td>—</td><td>—</td><td>—</td><td>—</td><td>10</td><td>58.53%</td><td>0</td><td>0</td><td>—</td></tr>
+  <tr><td>E0-50ep (baseline)</td><td>—</td><td>—</td><td>—</td><td>—</td><td>50</td><td>61.66%</td><td>—</td><td>0</td><td>—</td></tr>
+  <tr class="best"><td>E5</td><td>10</td><td>0.0</td><td>50</td><td>10</td><td>10</td><td>56.90%</td><td>-1.63%</td><td>972</td><td>1.73</td></tr>
+  <tr><td>E3</td><td>10</td><td>0.0</td><td>1.0</td><td>5</td><td>10</td><td>56.25%</td><td>-2.28%</td><td>850</td><td>5.67</td></tr>
+  <tr><td>E4</td><td>10</td><td>10</td><td>10</td><td>10</td><td>10</td><td>53.51%</td><td>-5.02%</td><td>927</td><td>1.92</td></tr>
+  <tr class="worst"><td>E6</td><td>10</td><td>0.0</td><td>10</td><td>20</td><td>10</td><td>48.22%</td><td>-10.31%</td><td>1140</td><td>0.46</td></tr>
+  <tr class="worst"><td>E2</td><td>1</td><td>-0.3</td><td>1.0</td><td>5</td><td>10</td><td>48.87%</td><td>-9.66%</td><td>1834</td><td>4.80</td></tr>
+  <tr class="worst"><td>E1</td><td>1</td><td>0.0</td><td>1.0</td><td>5</td><td>10</td><td>26.93%</td><td>-31.60%</td><td>4419</td><td>—</td></tr>
+</table>
+
+<h2>Class-IL 准确率对比</h2>
+<div class="chart">
+  <div class="bar-container"><div class="bar-label">E0-10ep (baseline)</div><div class="bar positive" style="width:395px">58.53%</div></div>
+  <div class="bar-container"><div class="bar-label">E5 (lt=50, best)</div><div class="bar positive" style="width:384px">56.90%</div></div>
+  <div class="bar-container"><div class="bar-label">E3 (lt=1, freq=10)</div><div class="bar positive" style="width:380px">56.25%</div></div>
+  <div class="bar-container"><div class="bar-label">E4 (lt=10)</div><div class="bar positive" style="width:361px">53.51%</div></div>
+  <div class="bar-container"><div class="bar-label">E2 (freq=1, thr=-0.3)</div><div class="bar negative" style="width:330px">48.87%</div></div>
+  <div class="bar-container"><div class="bar-label">E6 (lt=10, 20步) ← best lt!</div><div class="bar negative" style="width:325px">48.22%</div></div>
+  <div class="bar-container"><div class="bar-label">E1 (freq=1, thr=0)</div><div class="bar negative" style="width:182px">26.93%</div></div>
+</div>
+
+<h2>🔍 关键发现：lt 越小 → 准确率越差（悖论）</h2>
+<div class="key-finding">
+<p>直觉预期：更好的 loss invariance (小 lt) → 更少扰动 → 更好的准确率。</p>
+<p><strong>实际结果相反</strong>：</p>
+<ul>
+  <li>E3 (avg_lt=5.67, 基本不约束): 56.25%</li>
+  <li>E5 (avg_lt=1.73, lt_weight=50): 56.90% ← 最好</li>
+  <li>E6 (avg_lt=0.46, 最小！): <strong>48.22%</strong> ← 最差！</li>
+</ul>
+<p>这是 <strong>Flaw 5（零阶保证 ≠ 轨迹保证）</strong> 的直接体现：在单个 batch 上 loss 不变，不等于对所有样本的行为不变。</p>
+</div>
+
+<h2>🧩 根本原因分析</h2>
+<div class="flaw">
+<h3>Flaw 5 具体表现</h3>
+<p>当 lt_weight 高（强约束）时，optimizer 为了满足 L_t ≈ 0，需要在 <em>loss-flat 流形</em>上移动。
+这需要非常大的 LoRA delta（E6: delta_norm ≈ 25-30）：</p>
+<ul>
+  <li>在 <em>当前 batch</em> 上：loss 确实不变（lt=0.46）✓</li>
+  <li>在 <em>其他 batch</em> 上：大的 delta 破坏了泛化，相当于巨大的随机扰动 ✗</li>
+</ul>
+<p>结果：loss-equivalent at one point ≠ loss-equivalent for entire training trajectory。</p>
+</div>
+
+<div class="flaw">
+<h3>两难困境</h3>
+<table>
+  <tr><th>情况</th><th>lt</th><th>delta_norm</th><th>对当前 batch</th><th>对其他 batch</th><th>最终准确率</th></tr>
+  <tr><td>lt_weight=1 (不约束)</td><td>5.67</td><td>4-6</td><td>loss 被破坏</td><td>—</td><td>56.25%</td></tr>
+  <tr><td>lt_weight=50 (中等)</td><td>1.73</td><td>9-13</td><td>loss 部分保留</td><td>中等扰动</td><td>56.90%</td></tr>
+  <tr><td>lt_weight=10, 20步 (强约束)</td><td>0.46</td><td>25-30</td><td>loss 几乎不变</td><td>巨大扰动！</td><td>48.22%</td></tr>
+</table>
+</div>
+
+<h2>吞吐量影响</h2>
+<table>
+  <tr><th>配置</th><th>it/s</th><th>vs baseline</th><th>可行性</th></tr>
+  <tr><td>baseline (无 teleport)</td><td>~50</td><td>100%</td><td>✓</td></tr>
+  <tr><td>freq=10</td><td>~25</td><td>50%</td><td>勉强可接受</td></tr>
+  <tr><td>freq=1, thr=-0.3</td><td>~11</td><td>22%</td><td>✗ 太慢</td></tr>
+  <tr><td>freq=1, thr=0.0</td><td>~4</td><td>8%</td><td>✗✗ 不可行</td></tr>
+</table>
+
+<h2>结论</h2>
+<div class="key-finding">
+<p><strong>在线 teleport 方法（H6/H7）系统性地低于 ER baseline，且存在根本性理论缺陷：</strong></p>
+<ol>
+  <li><strong>不控制 lt</strong>: 破坏当前 batch 的 loss，准确率下降 -2% 到 -32%</li>
+  <li><strong>控制 lt</strong>: 需要大 LoRA delta，破坏其他 batch，准确率下降更多</li>
+  <li><strong>最佳结果</strong>: E5 (56.90%) 仍比 baseline (58.53%) 低 -1.63%</li>
+</ol>
+<p><strong>建议 PIVOT</strong>：放弃在线 teleport，转向以下方向之一：</p>
+<ul>
+  <li>任务边界 teleport 的改进（H6b 已经达到 -0.15%，非常接近 neutral）</li>
+  <li>验证梯度冲突 → 遗忘 的基本假设是否成立（先检验 hypothesis 本身）</li>
+  <li>SAM 风格一阶近似（计算量更小，可以更多步数）</li>
+</ul>
+</div>
+
+<p style="color:#6b7280;font-size:13px;margin-top:48px">自动生成 · mammoth research · 2026-04-16</p>
+</body>
+</html>

@@ -1,6 +1,9 @@
-exp_id,check_freq,threshold,lt_weight,n_steps,epochs,class_il,triggers,avg_lt_pct_gt1,notes
-E0-10ep,N/A,N/A,N/A,N/A,10,58.53,0,0,baseline ER
-E0-50ep,N/A,N/A,N/A,N/A,50,pending,0,0,baseline ER 50ep
-E2,1,-0.3,1.0,5,10,48.87,1834,76,freq=1 only severe conflicts
-E3,10,0.0,1.0,5,10,56.25,850,87,freq=10 all conflicts
-E1,1,0.0,1.0,5,10,pending,1113+,TBD,freq=1 all conflicts (slow)
+exp_id,check_freq,threshold,lt_weight,n_steps,epochs,class_il,triggers,avg_lt,notes
+E0-10ep,NA,NA,NA,NA,10,58.53,0,NA,baseline ER
+E0-50ep,NA,NA,NA,NA,50,61.66,0,NA,baseline ER 50ep
+E5,10,0.0,50.0,10,10,56.90,972,1.73,best online result
+E3,10,0.0,1.0,5,10,56.25,850,5.67,freq=10 unconstrained
+E4,10,0.0,10.0,10,10,53.51,927,1.92,lt_weight=10
+E2,1,-0.3,1.0,5,10,48.87,1834,4.80,freq=1 severe only
+E6,10,0.0,10.0,20,10,48.22,1140,0.46,most constrained lt (best lt=WORST acc)
+E1,1,0.0,1.0,5,10,26.93,4419,NA,freq=1 all conflicts (catastrophic)

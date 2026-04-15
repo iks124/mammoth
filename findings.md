@@ -5,86 +5,89 @@ Can mid-training gradient conflict detection + LoRA teleportation reduce catastr
 in continual learning, specifically by finding loss-equivalent parameter configurations with better
 gradient alignment between old and new tasks?
 
-## Current Understanding (2026-04-16)
+## Current Understanding (2026-04-16) — H7 COMPLETE
 
-### What Works
-- **Gradient conflict detection is reliable**: `detect_gradient_conflict` correctly identifies
-  steps where old/new task gradients conflict (cos_sim < 0), confirmed by diagnostic runs.
-- **cos_sim improvement mechanism works locally**: When lt_weight=1.0 (unconstrained),
-  teleportation improves gradient alignment in **~99% of triggered events**, with average
-  cos_sim improve of +0.8 to +1.0.
+### Complete Results
 
-### What Doesn't Work (Yet)
-- **All online teleport variants hurt accuracy** compared to ER baseline:
-  - E0-10ep (ER baseline, 10ep): **58.53%**
-  - E3 (freq=10, thr=0.0, lt=1.0): **56.25%** (-2.28%)
-  - E2 (freq=1, thr=-0.3, lt=1.0): **48.87%** (-9.66%)
+| Exp | freq | lt_weight | steps | Class-IL | Δbaseline | triggers | avg_lt |
+|-----|------|-----------|-------|----------|-----------|----------|--------|
+| E0-10ep (baseline) | — | — | — | **58.53%** | 0 | 0 | — |
+| E0-50ep (baseline) | — | — | — | **61.66%** | — | 0 | — |
+| E5 (best) | 10 | 50 | 10 | 56.90% | -1.63% | 972 | 1.73 |
+| E3 | 10 | 1.0 | 5 | 56.25% | -2.28% | 850 | 5.67 |
+| E4 | 10 | 10 | 10 | 53.51% | -5.02% | 927 | 1.92 |
+| E2 | 1 | 1.0 | 5 | 48.87% | -9.66% | 1834 | 4.80 |
+| E6 (best lt!) | 10 | 10 | 20 | 48.22% | -10.31% | 1140 | **0.46** |
+| E1 | 1 | 1.0 | 5 | 26.93% | -31.60% | 4419 | — |
 
-### Root Cause: Loss Invariance Failure
-With `lt_weight=1.0`, the optimizer sacrifices loss invariance entirely:
-- avg_lt = 5.67 (E3), 4.80 (E2) — loss changes by ~5 units per teleport
-- 87% of teleports have lt > 1.0
-- Each teleport is equivalent to a large noisy gradient step, disrupting training
+### Critical Paradox: Better lt → Worse Accuracy
 
-**Physical interpretation**: The LoRA optimizer finds a direction that improves cos_sim, but it
-takes a large step off the loss manifold. The merged weights then need many subsequent training
-steps to "recover". More teleports = more disruption = worse accuracy.
+E6 achieves the **lowest avg_lt (0.46)** — loss invariance is actually working — yet produces
+the **worst accuracy (48.22%)**.
 
-### New Round (H7b): Higher lt_weight
-Running E4 (lt=10), E5 (lt=50), E6 (lt=10, 20 steps). Early results:
-- E6: lt constrained (0.38) but delta_norm huge (25-30) and cos_sim gets **worse** — 
-  the optimizer moves along the loss-flat manifold but can't find better gradient alignment
-- E4: inconsistent — sometimes lt=0.26 (good), sometimes lt=8.83 (unconstrained)
-- E5: lt moderate (0.5-0.9), cos_sim modestly improved (+0.1 to +0.4)
+Root cause: **Flaw 5 confirmed experimentally**. To achieve low lt on the current batch, the
+optimizer must make a HUGE LoRA delta (delta_norm=25–30). This preserves loss on the specific
+batch but catastrophically disrupts behavior on all other batches. The "zero-order guarantee"
+(loss preserved at one point) does not cover the training trajectory.
+
+### Two-Sided Trap
+
+| Regime | lt | delta_norm | Effect |
+|--------|----|-----------|--------|
+| Unconstrained (lt_weight=1) | 5.67 | 4–6 | Current batch loss disrupted |
+| Moderate (lt_weight=50) | 1.73 | 9–13 | Partial disruption |
+| Strongly constrained (lt_weight=10, 20steps) | 0.46 | 25–30 | Other batches devastated |
+
+There is **no viable middle ground** with rank-2 LoRA in 5–20 steps.
 
 ## Patterns and Insights
 
-### The Bias-Variance Tradeoff for lt_weight
-- **Low lt_weight (1.0)**: cos_sim improves a lot BUT loss is destroyed → accuracy drops
-- **High lt_weight (10-50)**: loss preserved BUT cos_sim barely improves, or gets worse
-- No obvious sweet spot found yet
+### Pattern 1: Online Teleport Consistently Hurts
+All 6 online teleport variants are worse than baseline. The best result (E5: 56.90%) is still
+-1.63% below 10-epoch baseline. This is not a hyperparameter issue — it's structural.
 
-### Throughput is a Hard Constraint
-- freq=1: 8-12% of baseline throughput (4-11 it/s vs ~50 it/s). **Not viable**.
-- freq=10: ~50% throughput (25 it/s). **Acceptable** if accuracy improves.
-- The second-order gradient computation (create_graph=True) dominates cost per teleport.
+### Pattern 2: Frequency is Critical, But Not Sufficient
+- freq=1: 12x slower, -31.6% accuracy (catastrophic)
+- freq=10: 2x slower, -1.6% to -10.3% (bad to catastrophic)
+Even optimal frequency doesn't overcome the core issue.
 
-### The Core Tension
-Online teleportation must find a point P such that:
-1. L(P) ≈ L(θ) — loss invariant (lt ≈ 0)
-2. cos_sim(g_old(P), g_new(P)) > cos_sim(g_old(θ), g_new(θ)) — gradient alignment improves
-3. ‖P - θ‖ small — not too far from current weights
-
-Conditions 1 and 2 may be **fundamentally incompatible** with rank-2 LoRA in the online setting:
-the loss-flat subspace (condition 1) may not contain points with better gradient alignment
-(condition 2), especially with only 5-20 optimization steps and a small rank.
+### Pattern 3: cos_sim Improvement is Not Enough
+The teleport improves cos_sim in 93–99% of cases (mechanism works locally), but:
+1. The improvement doesn't persist across steps
+2. Each teleport creates a perturbation that hurts subsequent steps
+3. Many teleports per task (850–4419) compound the damage
 
 ## Lessons and Constraints
 
-1. **Never use freq=1, threshold=0.0**: 12x slowdown, not viable
-2. **lt_weight=1.0 is too weak**: effectively disables loss invariance, lt averages 5.7
-3. **freq=10 is the right frequency**: 2x slowdown, acceptable if accuracy improves  
-4. **Online teleport at task boundary (H6b)**: tried threshold=-0.3, gave -0.15% 
-   (nearly neutral, very stable std=0.74%) — better than mid-training online
-5. **LoRA rank=2 may be too small**: insufficient degrees of freedom to satisfy both constraints
+1. Online teleport (H6/H7) is **fundamentally broken** with rank-2 LoRA
+2. freq=1 is never viable (12x slowdown, catastrophic accuracy)
+3. lt_weight tuning cannot fix the structural issue (Flaw 5)
+4. delta_norm must be kept small to avoid disrupting other batches — but then lt can't be controlled
+5. The 50-epoch baseline (61.66%) is the proper reference for the full method
 
-## Open Questions
+## Open Questions / Next Directions
 
-1. Does any lt_weight value achieve lt < 0.1 while still improving cos_sim?
-2. Does the online approach work at all with the current rank-2 LoRA parameterization?
-3. Should we pivot back to task-boundary teleportation (H6b) which was nearly neutral?
-4. Is the fundamental hypothesis (gradient conflict → forgetting) verified empirically?
-5. SAM-style first-order approximation: would it be faster AND more effective?
+### Option A: PIVOT to task-boundary teleport improvement
+H6b (task-boundary, threshold=-0.3): -0.15%, std=0.74% (neutral/stable)
+Can we understand why H6b is neutral and push it positive?
 
-## Experiment Trajectory
+### Option B: Verify the fundamental hypothesis
+Does gradient conflict actually CAUSE forgetting? If not, teleportation is solving the wrong problem.
+Test: measure correlation between per-step cos_sim and eventual forgetting on that task.
 
-| Run | Config | Class-IL | Δ baseline | Status |
-|-----|--------|----------|-----------|--------|
-| E0-10ep | ER 10ep | 58.53% | baseline | DONE |
-| E0-50ep | ER 50ep | pending | — | running |
-| E3 | freq=10, lt=1.0 | 56.25% | -2.28% | DONE |
-| E2 | freq=1, thr=-0.3, lt=1.0 | 48.87% | -9.66% | DONE |
-| E1 | freq=1, thr=0.0, lt=1.0 | pending | — | running (slow) |
-| E4 | freq=10, lt=10 | pending | — | running |
-| E5 | freq=10, lt=50 | pending | — | running |
-| E6 | freq=10, lt=10, 20steps | pending | — | running |
+### Option C: SAM-style first-order approximation
+Replace create_graph=True with weight perturbation:
+g_approx = (g(θ + ε*sign(g)) - g(θ)) / ε
+Much cheaper → can do more steps or higher rank without blowing up compute.
+
+### Option D: Conditional merge
+Only merge if both: (a) lt < 0.1 AND (b) cos_sim actually improved.
+Filter out bad teleports. Roughly 5% of events would pass. Very few merges = little disruption.
+But: is this enough to help? Unclear.
+
+## Decision: PIVOT
+
+Online teleport does not work. The theoretical flaws (Flaw 5: zero-order ≠ trajectory) are
+confirmed experimentally. Recommend pivoting to either:
+1. Investigating why H6b (task-boundary) is neutral
+2. Verifying the gradient conflict → forgetting hypothesis itself
