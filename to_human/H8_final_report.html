@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Final Research Report: LoRA Teleportation for Continual Learning</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1000px; margin: 0 auto; padding: 30px; color: #222; line-height: 1.6; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #e63946; padding-bottom: 12px; }
+  h2 { color: #1a1a2e; margin-top: 40px; border-left: 4px solid #457b9d; padding-left: 12px; }
+  h3 { color: #333; margin-top: 28px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.9em; }
+  th { background: #1a1a2e; color: white; padding: 10px 14px; text-align: left; }
+  td { padding: 8px 14px; border-bottom: 1px solid #ddd; }
+  tr:nth-child(even) { background: #f8f9fa; }
+  .verdict-bad { background: #ffe0e0; color: #c0392b; font-weight: bold; padding: 3px 8px; border-radius: 4px; }
+  .verdict-neutral { background: #fff3cd; color: #856404; font-weight: bold; padding: 3px 8px; border-radius: 4px; }
+  .verdict-key { background: #d4edda; color: #155724; font-weight: bold; padding: 3px 8px; border-radius: 4px; }
+  .box { padding: 16px 20px; border-radius: 6px; margin: 16px 0; }
+  .box-red { background: #ffe0e0; border-left: 4px solid #e63946; }
+  .box-blue { background: #e8f4f8; border-left: 4px solid #457b9d; }
+  .box-green { background: #d4edda; border-left: 4px solid #28a745; }
+  .box-yellow { background: #fff3cd; border-left: 4px solid #ffc107; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.88em; }
+  .big-r { font-size: 2em; font-weight: bold; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 200px; margin: 16px 0; }
+  .bar { display: flex; flex-direction: column; align-items: center; flex: 1; }
+  .bar-fill { width: 100%; border-radius: 4px 4px 0 0; position: relative; }
+  .bar-label { font-size: 0.75em; margin-top: 4px; text-align: center; }
+  .bar-val { font-size: 0.75em; font-weight: bold; text-align: center; }
+  .timeline { border-left: 3px solid #457b9d; margin: 16px 0 16px 20px; padding-left: 24px; }
+  .timeline-item { margin-bottom: 20px; position: relative; }
+  .timeline-item::before { content: ''; width: 12px; height: 12px; border-radius: 50%; background: #457b9d; position: absolute; left: -30px; top: 4px; }
+  .timeline-item.failed::before { background: #e63946; }
+  .timeline-item.partial::before { background: #ffc107; }
+  .section-num { background: #1a1a2e; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.85em; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>LoRA Teleportation for Continual Learning — Final Research Report</h1>
+<p style="color:#666; font-size:0.9em;">2026-04-16 &nbsp;|&nbsp; seq-cifar10, ER, buffer=500 &nbsp;|&nbsp; Experiments: H1–H8 &nbsp;|&nbsp; Status: <strong>CONCLUDE</strong></p>
+
+<div class="box box-blue">
+  <strong>Research Question:</strong> Can mid-training gradient conflict detection + LoRA teleportation reduce
+  catastrophic forgetting in continual learning, by finding loss-equivalent parameter configurations
+  with better gradient alignment between old and new tasks?
+  <br><br>
+  <strong>Answer: No.</strong> This report explains why, and what we learned from 8 hypothesis families.
+</div>
+
+<h2>1. Complete Results Summary</h2>
+
+<table>
+<tr><th>Experiment</th><th>Description</th><th>Class-IL</th><th>Δ Baseline</th><th>Verdict</th></tr>
+<tr><td><strong>E0-10ep (baseline)</strong></td><td>ER, 10 epochs</td><td><strong>58.53%</strong></td><td>—</td><td><span class="verdict-key">Reference</span></td></tr>
+<tr><td>E0-50ep (baseline)</td><td>ER, 50 epochs</td><td>61.66%</td><td>—</td><td><span class="verdict-key">Reference</span></td></tr>
+<tr><td>H6b (τ=−0.3)</td><td>Task-boundary teleport</td><td>45.49%</td><td>−0.15%</td><td><span class="verdict-neutral">Neutral</span></td></tr>
+<tr><td>H7 E5 (best)</td><td>Online, freq=10, lt_w=50</td><td>56.90%</td><td>−1.63%</td><td><span class="verdict-bad">Fails</span></td></tr>
+<tr><td>H7 E3</td><td>Online, freq=10, lt_w=1</td><td>56.25%</td><td>−2.28%</td><td><span class="verdict-bad">Fails</span></td></tr>
+<tr><td>H7 E4</td><td>Online, freq=10, lt_w=10</td><td>53.51%</td><td>−5.02%</td><td><span class="verdict-bad">Fails</span></td></tr>
+<tr><td>H7 E2</td><td>Online, freq=1, τ=−0.3</td><td>48.87%</td><td>−9.66%</td><td><span class="verdict-bad">Fails</span></td></tr>
+<tr><td>H7 E6</td><td>Online, freq=10, 20 steps</td><td>48.22%</td><td>−10.31%</td><td><span class="verdict-bad">Worst</span></td></tr>
+<tr><td>H7 E1</td><td>Online, freq=1, thr=0</td><td>26.93%</td><td>−31.60%</td><td><span class="verdict-bad">Catastrophic</span></td></tr>
+</table>
+
+<h2>2. Two Critical Findings</h2>
+
+<h3>Finding A: The "Zero-Order Trap" (H7)</h3>
+
+<div class="box box-red">
+<strong>Flaw 5 Confirmed:</strong> Preserving loss on one batch ≠ preserving training trajectory.
+</div>
+
+The LoRA teleportation optimizes: <code>total_loss = lt_weight * L_t − cos_sim + reg * lora_reg</code>
+
+Where <code>L_t = |L(θ + ΔΘ, batch) − L_ref|</code> is the loss invariance constraint.
+This creates a two-sided trap with no viable middle ground:
+
+<table>
+<tr><th>Regime</th><th>avg_lt</th><th>delta_norm</th><th>Effect</th></tr>
+<tr><td>Unconstrained (lt_weight=1)</td><td>5.67</td><td>4–6</td><td>Current batch loss disrupted (+5.7 units)</td></tr>
+<tr><td>Moderate (lt_weight=50)</td><td>1.73</td><td>9–13</td><td>Partial disruption</td></tr>
+<tr><td>Strongly constrained (lt_weight=10, 20 steps)</td><td><strong>0.46</strong></td><td>25–30</td><td>Other batches catastrophically disrupted</td></tr>
+</table>
+
+To achieve low L_t on ONE batch, the optimizer must make a LARGE LoRA delta (‖ΔΘ‖ = 25–30),
+which devastates behavior on all OTHER batches. Best online teleport is still −1.63%.
+
+<h3>Finding B: Gradient Conflict is Ubiquitous (H8)</h3>
+
+<div class="box box-red">
+<strong>78.9% of all training steps have cos_sim(g_old, g_new) &lt; 0.</strong>
+</div>
+
+<table>
+<tr><th>Seed</th><th>Task 1 mean cos</th><th>Task 2</th><th>Task 3</th><th>Task 4</th><th>Neg% avg</th></tr>
+<tr><td>42</td><td>−0.173 (70.6%)</td><td>−0.252 (83.1%)</td><td>−0.214 (77.0%)</td><td>−0.133 (75.1%)</td><td>76.5%</td></tr>
+<tr><td>123</td><td>−0.179 (73.2%)</td><td>−0.216 (78.6%)</td><td>−0.304 (89.1%)</td><td>−0.155 (78.3%)</td><td>79.8%</td></tr>
+<tr><td>456</td><td>−0.234 (80.8%)</td><td>−0.221 (79.6%)</td><td>−0.268 (84.7%)</td><td>−0.131 (76.4%)</td><td>80.4%</td></tr>
+<tr style="font-weight:bold;"><td>Mean</td><td>−0.195</td><td>−0.230</td><td>−0.262</td><td>−0.140</td><td><strong>78.9%</strong></td></tr>
+</table>
+
+<p>Correlation between mean cos_sim per task and per-task forgetting:</p>
+
+<table>
+<tr><th>Seed</th><th>r (direct)</th><th>r (cross-task)</th><th>Verdict</th></tr>
+<tr><td>42</td><td>−0.43</td><td>−0.73</td><td>Weakly supported</td></tr>
+<tr><td>123</td><td>−0.01</td><td>−0.32</td><td>Not supported</td></tr>
+<tr><td>456</td><td>−0.54</td><td>+0.08</td><td>Weakly supported (opposite cross)</td></tr>
+<tr style="font-weight:bold;"><td>Pooled</td><td>−0.25</td><td>—</td><td><span class="verdict-neutral">Inconclusive</span></td></tr>
+</table>
+
+<div class="box box-yellow">
+<strong>Why the hypothesis fails:</strong> With 79% of steps showing conflict, mean cos_sim per task
+varies only from −0.13 to −0.30 across tasks. This narrow range (0.17 units) has insufficient
+discriminating power. The weak negative correlation (r=−0.25) is largely driven by task-order
+confound: last task always has zero forgetting AND least negative cos_sim (fewer old tasks to
+conflict with). When removing the trivially-unforgetting last task, the pooled r becomes +0.52 —
+the opposite direction — indicating the effect is an artifact.
+</div>
+
+<h2>3. Why LoRA Teleportation Cannot Work (Theory)</h2>
+
+<div class="timeline">
+  <div class="timeline-item failed">
+    <strong>Flaw 1: cos_sim ≠ Forgetting Reduction</strong><br>
+    Improving gradient alignment on one batch at one instant doesn't guarantee the training
+    trajectory will avoid forgetting. 3130 steps accumulate tiny errors that overwhelm any
+    momentary improvement.
+  </div>
+  <div class="timeline-item partial">
+    <strong>Flaw 4: 512-dimensional search space</strong><br>
+    Rank-2 LoRA on last 2 layers = 512 free parameters. The conflict manifold lives in
+    a much higher-dimensional space. The LoRA subspace cannot always find solutions.
+  </div>
+  <div class="timeline-item failed">
+    <strong>Flaw 5: Zero-order guarantee ≠ trajectory (CONFIRMED)</strong><br>
+    L_t = 0 at one batch means ΔΘ is large (25–30 norm). This large delta perturbs ALL
+    other batches. The training trajectory is disrupted worse than doing nothing.
+  </div>
+  <div class="timeline-item failed">
+    <strong>Root cause: Conflict is pervasive (H8)</strong><br>
+    If 79% of steps have conflict, no teleportation strategy applied to a subset of steps
+    can systematically change the gradient conflict character of training.
+  </div>
+</div>
+
+<h2>4. Research Timeline</h2>
+
+<table>
+<tr><th>Phase</th><th>What</th><th>Result</th></tr>
+<tr><td>H1–H4</td><td>ReLU scaling teleport, various modes</td><td>−1% to −3% vs baseline</td></tr>
+<tr><td>H5</td><td>LoRA teleportation at task boundary</td><td>Neutral to −2%</td></tr>
+<tr><td>H6b</td><td>Task-boundary, threshold sweep</td><td>Best: −0.15% (τ=−0.3)</td></tr>
+<tr><td>H7</td><td>Online teleport, freq & lt_weight sweep</td><td>−1.6% to −31.6% (all fail)</td></tr>
+<tr><td>H8</td><td>Hypothesis verification: gradient conflict → forgetting?</td><td>NOT CONFIRMED (r=−0.25)</td></tr>
+</table>
+
+<h2>5. What We Learned</h2>
+
+<div class="box box-blue">
+<ol>
+<li><strong>Gradient conflict (cos_sim &lt; 0) is the normal state of CL training</strong>, not an exceptional event. 79% of steps show conflict. You cannot "fix" forgetting by correcting 1% of steps.</li>
+<li><strong>Loss invariance at one batch ≠ trajectory invariance.</strong> The zero-order constraint is fundamentally insufficient — it forces large ΔΘ that disrupts all other batches.</li>
+<li><strong>Task-boundary teleport is neutral at best</strong> (−0.15%). The initial gradient is too noisy a proxy for 3130-step trajectory direction.</li>
+<li><strong>freq=1 is never viable</strong> (12× slowdown, −31.6% accuracy). The compute cost of online second-order gradients is prohibitive.</li>
+<li><strong>The fundamental hypothesis is not confirmable</strong> with mini-batch cos_sim. The proxy lacks discriminating power (0.17 unit range, 12 data points).</li>
+</ol>
+</div>
+
+<h2>6. Directions NOT Pursued (and Why)</h2>
+
+<ul>
+<li><strong>SAM-style first-order approximation (Option C):</strong> Would reduce compute but doesn't address Flaw 5. The structural issue remains.</li>
+<li><strong>Conditional merge (Option D):</strong> Only ~5% of events pass strict criteria. Too few merges to systematically reduce forgetting over 3130 steps.</li>
+<li><strong>Higher-rank LoRA:</strong> Rank-2 is already expensive (rank-2 × 2 states × 2 passes = 4 second-order forward passes). Higher rank would be 4–8× slower.</li>
+</ul>
+
+<h2>7. Conclusion</h2>
+
+<div class="box box-red">
+<strong>The LoRA teleportation approach for continual learning does not work in this form.</strong>
+This is a coherent, rigorous negative result supported by:
+<ul style="margin:8px 0">
+<li>8 hypothesis families, 15+ experiments</li>
+<li>Structural analysis (5 identified flaws, 2 confirmed experimentally)</li>
+<li>Hypothesis verification experiment (H8) showing the fundamental premise is not supported</li>
+</ul>
+The problem is not hyperparameters — it is the design itself.
+</div>
+
+<p style="color:#888; font-size:0.85em; margin-top:40px;">Generated 2026-04-16 by Claude Sonnet 4.6 autoresearch. Project: /home/shihoukun/project/mammoth</p>
+</body>
+</html>
