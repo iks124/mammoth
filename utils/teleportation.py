@@ -24,6 +24,7 @@ References:
 """
 
 import logging
+import itertools
 from typing import List, Dict, Optional
 
 import torch
@@ -741,9 +742,10 @@ def detect_gradient_conflict(net: nn.Module,
     """
     x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
 
-    # Sample one batch from old memory
+    # Sample one batch from old memory — cycle loader infinitely if samples are exhausted
+    old_loader_cycle = itertools.cycle(old_dataloader)
     try:
-        batch_old = next(iter(old_dataloader))
+        batch_old = next(old_loader_cycle)
     except StopIteration:
         return 1.0  # no old data: no conflict
     x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
@@ -833,9 +835,10 @@ def teleport_lora_online(net: nn.Module,
 
     x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
 
-    # Sample old batch
+    # Sample old batch — cycle loader infinitely if samples are exhausted
+    old_loader_cycle = itertools.cycle(old_dataloader)
     try:
-        batch_old = next(iter(old_dataloader))
+        batch_old = next(old_loader_cycle)
     except StopIteration:
         net.train(was_training)
         return history
@@ -865,6 +868,7 @@ def teleport_lora_online(net: nn.Module,
         lora_params_new = list(lora_state_new.values())
 
         # g_old and g_new (create_graph for 2nd order through LoRA params)
+        # TODO: 后续优化为SAM风格一阶近似以减少计算量：无需create_graph，直接计算两次无梯度forward + 权重扰动
         out_old = torch.func.functional_call(net, lora_state_old, (x_old,))
         l_old_cur = loss_fn(out_old, y_old)
         g_old = torch.autograd.grad(l_old_cur, lora_params_old, create_graph=True,
