@@ -109,6 +109,48 @@ def train_single_epoch(model: ContinualModel,
 
         assert not math.isnan(loss)
 
+        # --- Online teleportation (H6): mid-training gradient conflict detection ---
+        if (args is not None
+                and getattr(args, 'teleport', 0)
+                and getattr(args, 'teleport_mode', 'scaling') == 'online'
+                and hasattr(model, '_teleport_memory')
+                and len(model._teleport_memory.data) >= 1):
+            # i is already incremented above at the end of loop body — use model.task_iteration
+            _online_step = getattr(model, '_teleport_online_step', 0) + 1
+            model._teleport_online_step = _online_step
+            check_freq = getattr(args, 'teleport_check_freq', 50)
+
+            if _online_step % check_freq == 0:
+                from utils.teleportation import detect_gradient_conflict, teleport_lora_online
+                old_loader = model._teleport_memory.get_old_dataloader(batch_size=32)
+                if old_loader is not None:
+                    cos_val = detect_gradient_conflict(
+                        net=model.net,
+                        batch_new=(inputs, labels),
+                        old_dataloader=old_loader,
+                        loss_fn=model.loss,
+                        device=model.device,
+                        approx_layers=getattr(args, 'teleport_approx_layers', 2),
+                    )
+                    threshold = getattr(args, 'teleport_conflict_threshold', 0.0)
+                    logging.debug(
+                        f"[Teleport-Online] step={_online_step} cos_sim={cos_val:.4f} "
+                        f"(threshold={threshold})"
+                    )
+                    if cos_val < threshold:
+                        teleport_lora_online(
+                            net=model.net,
+                            batch_new=(inputs, labels),
+                            old_dataloader=old_loader,
+                            loss_fn=model.loss,
+                            n_steps=getattr(args, 'teleport_online_steps', 5),
+                            lr_lora=getattr(args, 'teleport_lr', 1e-3),
+                            reg_lambda=getattr(args, 'teleport_reg', 0.01),
+                            lt_weight=getattr(args, 'teleport_lt_weight', 1.0),
+                            lora_rank=getattr(args, 'teleport_lora_rank', 2),
+                            device=model.device,
+                        )
+
         if scheduler is not None and args.scheduler_mode == 'iter':
             scheduler.step()
 
@@ -250,85 +292,98 @@ def train(model: ContinualModel, dataset: ContinualDataset,
 
                     # Sample current task into memory *before* training so it becomes "new".
                     model._teleport_memory.update(train_loader)
-                    n_tasks_seen = len(model._teleport_memory.data)
-                    n_old = sum(x.size(0) for x in model._teleport_memory.data[:-1]) if n_tasks_seen > 1 else 0
-                    n_new = model._teleport_memory.data[-1].size(0)
-                    old_loader = model._teleport_memory.get_old_dataloader(batch_size=max(n_old, 1))
-                    new_loader = model._teleport_memory.get_new_dataloader(batch_size=n_new)
-                    n_steps = args.teleport_steps * n_tasks_seen
-
-                    teleport_history = {'cos_sim': [], 'reg': [], 'total_loss': [],
-                                        'max_abs_log_t': [], 'mean_abs_log_t': [],
-                                        'grad_norm_log_t': []}
 
                     teleport_mode = getattr(args, 'teleport_mode', 'scaling')
 
-                    if old_loader is None:
-                        logging.info(f"[Teleport] Task 1 — no old tasks yet, skipping.")
+                    if teleport_mode == 'online':
+                        # Online mode: no task-boundary teleportation. Just update memory and
+                        # reset step counter. The actual teleportation happens inside
+                        # train_single_epoch every `teleport_check_freq` steps.
+                        model._teleport_online_step = 0
+                        n_tasks_seen = len(model._teleport_memory.data)
+                        logging.info(
+                            f"[Teleport-Online] Task {cur_task}: memory updated "
+                            f"({n_tasks_seen} tasks, check_freq={getattr(args, 'teleport_check_freq', 50)}, "
+                            f"online_steps={getattr(args, 'teleport_online_steps', 5)})"
+                        )
                     else:
-                        accs_before_teleport = eval_dataset.evaluate(model, eval_dataset)
-                        logging.info(
-                            f"[Teleport-{teleport_mode}] Running BEFORE task {cur_task} training "
-                            f"({n_tasks_seen} tasks in memory, "
-                            f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
-                            f"{n_steps} steps)..."
-                        )
+                        n_tasks_seen = len(model._teleport_memory.data)
+                        n_old = sum(x.size(0) for x in model._teleport_memory.data[:-1]) if n_tasks_seen > 1 else 0
+                        n_new = model._teleport_memory.data[-1].size(0)
+                        old_loader = model._teleport_memory.get_old_dataloader(batch_size=max(n_old, 1))
+                        new_loader = model._teleport_memory.get_new_dataloader(batch_size=n_new)
+                        n_steps = args.teleport_steps * n_tasks_seen
 
-                        if teleport_mode == 'lora':
-                            from utils.teleportation import teleport_lora_for_cl, apply_htr
-                            teleport_history = teleport_lora_for_cl(
-                                net=model.net,
-                                old_dataloader=old_loader,
-                                new_dataloader=new_loader,
-                                loss_fn=model.loss,
-                                n_steps=n_steps,
-                                lr_lora=args.teleport_lr,
-                                gamma=getattr(args, 'teleport_gamma', 1.0),
-                                lora_rank=getattr(args, 'teleport_lora_rank', 4),
-                                sharpness_radius=getattr(args, 'teleport_sharpness_radius', 0.05),
-                                n_sharpness=5,
-                                device=model.device,
-                            )
-                            # HTR: modulate optimizer momentum post-teleportation
-                            if getattr(args, 'teleport_htr', 0):
-                                apply_htr(model.opt, delta_theta=None, grad_pre=None)
+                        teleport_history = {'cos_sim': [], 'reg': [], 'total_loss': [],
+                                            'max_abs_log_t': [], 'mean_abs_log_t': [],
+                                            'grad_norm_log_t': []}
+
+                        if old_loader is None:
+                            logging.info(f"[Teleport] Task 1 — no old tasks yet, skipping.")
                         else:
-                            teleport_history = teleport_for_flat_minimum(
-                                net=model.net,
-                                old_dataloader=old_loader,
-                                new_dataloader=new_loader,
-                                loss_fn=model.loss,
-                                n_steps=n_steps,
-                                lr_t=args.teleport_lr,
-                                reg_lambda=args.teleport_reg,
-                                device=model.device,
-                            )
-
-                        accs_after_teleport = eval_dataset.evaluate(model, eval_dataset)
-                        invariance_delta = (float(np.mean(accs_after_teleport[0]))
-                                            - float(np.mean(accs_before_teleport[0])))
-                        logging.info(
-                            f"[Teleport] Acc delta after teleport: {invariance_delta:+.4f}% "
-                            f"(LoRA mode: expected small; scaling mode: expected ~0)"
-                        )
-
-                        model._teleport_acc_pre_training = accs_after_teleport
-
-                        # Log LoRA-mode metrics
-                        if teleport_mode == 'lora' and teleport_history.get('cos_sim'):
-                            cs_vals = teleport_history['cos_sim']
-                            dn_vals = teleport_history['delta_norm']
+                            accs_before_teleport = eval_dataset.evaluate(model, eval_dataset)
                             logging.info(
-                                f"[Teleport-LoRA] cos_sim: {cs_vals[0]:.4f}->{cs_vals[-1]:.4f}  "
-                                f"delta_norm: {dn_vals[0]:.4f}->{dn_vals[-1]:.4f}"
+                                f"[Teleport-{teleport_mode}] Running BEFORE task {cur_task} training "
+                                f"({n_tasks_seen} tasks in memory, "
+                                f"{sum(x.size(0) for x in model._teleport_memory.data)} samples, "
+                                f"{n_steps} steps)..."
                             )
 
-                        # Log scaling-mode metrics
-                        elif teleport_mode == 'scaling' and teleport_history.get('cos_sim'):
-                            cs_curve = teleport_history['cos_sim']
+                            if teleport_mode == 'lora':
+                                from utils.teleportation import teleport_lora_for_cl, apply_htr
+                                teleport_history = teleport_lora_for_cl(
+                                    net=model.net,
+                                    old_dataloader=old_loader,
+                                    new_dataloader=new_loader,
+                                    loss_fn=model.loss,
+                                    n_steps=n_steps,
+                                    lr_lora=args.teleport_lr,
+                                    gamma=getattr(args, 'teleport_gamma', 1.0),
+                                    lora_rank=getattr(args, 'teleport_lora_rank', 4),
+                                    sharpness_radius=getattr(args, 'teleport_sharpness_radius', 0.05),
+                                    n_sharpness=5,
+                                    device=model.device,
+                                )
+                                # HTR: modulate optimizer momentum post-teleportation
+                                if getattr(args, 'teleport_htr', 0):
+                                    apply_htr(model.opt, delta_theta=None, grad_pre=None)
+                            else:
+                                teleport_history = teleport_for_flat_minimum(
+                                    net=model.net,
+                                    old_dataloader=old_loader,
+                                    new_dataloader=new_loader,
+                                    loss_fn=model.loss,
+                                    n_steps=n_steps,
+                                    lr_t=args.teleport_lr,
+                                    reg_lambda=args.teleport_reg,
+                                    device=model.device,
+                                )
+
+                            accs_after_teleport = eval_dataset.evaluate(model, eval_dataset)
+                            invariance_delta = (float(np.mean(accs_after_teleport[0]))
+                                                - float(np.mean(accs_before_teleport[0])))
                             logging.info(
-                                f"[Teleport-scaling] cos_sim: {cs_curve[0]:.4f}->{cs_curve[-1]:.4f}"
+                                f"[Teleport] Acc delta after teleport: {invariance_delta:+.4f}% "
+                                f"(LoRA mode: expected small; scaling mode: expected ~0)"
                             )
+
+                            model._teleport_acc_pre_training = accs_after_teleport
+
+                            # Log LoRA-mode metrics
+                            if teleport_mode == 'lora' and teleport_history.get('cos_sim'):
+                                cs_vals = teleport_history['cos_sim']
+                                dn_vals = teleport_history['delta_norm']
+                                logging.info(
+                                    f"[Teleport-LoRA] cos_sim: {cs_vals[0]:.4f}->{cs_vals[-1]:.4f}  "
+                                    f"delta_norm: {dn_vals[0]:.4f}->{dn_vals[-1]:.4f}"
+                                )
+
+                            # Log scaling-mode metrics
+                            elif teleport_mode == 'scaling' and teleport_history.get('cos_sim'):
+                                cs_curve = teleport_history['cos_sim']
+                                logging.info(
+                                    f"[Teleport-scaling] cos_sim: {cs_curve[0]:.4f}->{cs_curve[-1]:.4f}"
+                                )
 
                 # Scheduler is automatically reloaded after each task if defined in the dataset.
                 # If the model defines it, it becomes the job of the model to reload it.

@@ -716,6 +716,218 @@ def apply_htr(optimizer, delta_theta: torch.Tensor, grad_pre: torch.Tensor):
 # CLI integration
 # ---------------------------------------------------------------------------
 
+def detect_gradient_conflict(net: nn.Module,
+                              batch_new: tuple,
+                              old_dataloader,
+                              loss_fn,
+                              device: str = 'cuda',
+                              approx_layers: int = 2) -> float:
+    """
+    Fast gradient-conflict detection between current task and old-task memory.
+
+    Computes cos_sim(g_new, g_old) using only the last `approx_layers` Conv2d/Linear
+    layers for speed (~10x faster than full network).
+
+    Args:
+        net:           backbone network
+        batch_new:     (x, y) tuple for current task batch (already on device)
+        old_dataloader: DataLoader over old-task memory samples
+        loss_fn:       task loss function
+        device:        torch device
+        approx_layers: number of last layers to use for gradient approximation
+
+    Returns:
+        cos_sim value (float). Negative means gradient conflict.
+    """
+    x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
+
+    # Sample one batch from old memory
+    try:
+        batch_old = next(iter(old_dataloader))
+    except StopIteration:
+        return 1.0  # no old data: no conflict
+    x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
+
+    # Identify the last `approx_layers` Conv2d/Linear weight params
+    all_weight_params = []
+    for _, module in net.named_modules():
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            for pname, p in module.named_parameters(recurse=False):
+                if 'weight' in pname:
+                    all_weight_params.append(p)
+    probe_params = all_weight_params[-approx_layers:] if len(all_weight_params) >= approx_layers else all_weight_params
+    if not probe_params:
+        return 1.0
+
+    was_training = net.training
+    net.eval()
+
+    with torch.enable_grad():
+        # g_new
+        net.zero_grad()
+        loss_new = loss_fn(net(x_new), y_new)
+        loss_new.backward()
+        g_new_flat = torch.cat([p.grad.reshape(-1).clone() for p in probe_params])
+
+        # g_old
+        net.zero_grad()
+        loss_old = loss_fn(net(x_old), y_old)
+        loss_old.backward()
+        g_old_flat = torch.cat([p.grad.reshape(-1).clone() for p in probe_params])
+
+    net.zero_grad()
+    net.train(was_training)
+
+    cos = (g_new_flat * g_old_flat).sum() / (g_new_flat.norm() * g_old_flat.norm() + 1e-8)
+    return cos.item()
+
+
+@torch.enable_grad()
+def teleport_lora_online(net: nn.Module,
+                          batch_new: tuple,
+                          old_dataloader,
+                          loss_fn,
+                          n_steps: int = 5,
+                          lr_lora: float = 1e-3,
+                          reg_lambda: float = 0.01,
+                          lt_weight: float = 1.0,
+                          lora_rank: int = 2,
+                          device: str = 'cuda') -> dict:
+    """
+    Mini online LoRA teleportation for CL — triggered during training when
+    gradient conflict is detected.
+
+    Unlike the task-boundary teleportation (teleport_lora_for_cl), this is:
+    - Small: very few steps (default 5) and low rank (default 2)
+    - Loss-invariant: L_t constrains the LoRA delta to not change loss values
+      on both old memory AND the current training batch
+    - Triggered mid-training, merged immediately, training continues
+
+    Objective per step:
+        L = lt_weight * L_t  -  cos_sim(g_old, g_new)
+
+        L_t = |L_old(θ+ΔΘ) - L_old_ref| + |L_new(θ+ΔΘ) - L_new_ref|
+
+    This is the COST/BOOST approach adapted for CL, where "groups" are
+    {old tasks (ER buffer), current task batch}.
+
+    Args:
+        net:           backbone network
+        batch_new:     (x, y) current training batch (already on device)
+        old_dataloader: DataLoader over old-task memory
+        loss_fn:       task loss function
+        n_steps:       LoRA optimisation steps (small, default 5)
+        lr_lora:       LoRA learning rate
+        reg_lambda:    Frobenius norm regularisation on LoRA delta
+        lt_weight:     weight for L_t (loss invariance) term
+        lora_rank:     LoRA rank (small, default 2)
+        device:        torch device
+
+    Returns:
+        dict with cos_sim history
+    """
+    history = {'cos_sim': [], 'lt': [], 'delta_norm': []}
+
+    was_training = net.training
+    net.eval()
+
+    x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
+
+    # Sample old batch
+    try:
+        batch_old = next(iter(old_dataloader))
+    except StopIteration:
+        net.train(was_training)
+        return history
+    x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
+
+    original_state = {k: v.clone() for k, v in net.state_dict().items()}
+
+    # Reference losses (frozen targets for L_t)
+    with torch.no_grad():
+        l_new_ref = loss_fn(net(x_new), y_new).item()
+        l_old_ref = loss_fn(net(x_old), y_old).item()
+
+    lora_list = _get_lora_params(net, rank=lora_rank, device=device)
+    if not lora_list:
+        net.train(was_training)
+        return history
+
+    all_lora = [lp['B'] for lp in lora_list] + [lp['A'] for lp in lora_list]
+    opt_lora = torch.optim.Adam(all_lora, lr=lr_lora)
+
+    for _step in range(n_steps):
+        # Build two independent LoRA states for g_old and g_new
+        lora_state_old = _build_lora_state(lora_list, original_state, device)
+        lora_params_old = list(lora_state_old.values())
+
+        lora_state_new = _build_lora_state(lora_list, original_state, device)
+        lora_params_new = list(lora_state_new.values())
+
+        # g_old and g_new (create_graph for 2nd order through LoRA params)
+        out_old = torch.func.functional_call(net, lora_state_old, (x_old,))
+        l_old_cur = loss_fn(out_old, y_old)
+        g_old = torch.autograd.grad(l_old_cur, lora_params_old, create_graph=True,
+                                     retain_graph=True)
+        g_old_flat = torch.cat([g.reshape(-1) for g in g_old])
+
+        out_new = torch.func.functional_call(net, lora_state_new, (x_new,))
+        l_new_cur = loss_fn(out_new, y_new)
+        g_new = torch.autograd.grad(l_new_cur, lora_params_new, create_graph=True,
+                                     retain_graph=True)
+        g_new_flat = torch.cat([g.reshape(-1) for g in g_new])
+
+        # cos_sim objective
+        cos_sim_val = (g_old_flat * g_new_flat).sum() / (
+            g_old_flat.norm() * g_new_flat.norm() + 1e-8)
+
+        # L_t: loss invariance on old and new (rebuild fresh states for L_t)
+        lora_state_lt_old = _build_lora_state(lora_list, original_state, device)
+        lora_state_lt_new = _build_lora_state(lora_list, original_state, device)
+        lt_old = (loss_fn(torch.func.functional_call(net, lora_state_lt_old, (x_old,)), y_old)
+                  - l_old_ref).abs()
+        lt_new = (loss_fn(torch.func.functional_call(net, lora_state_lt_new, (x_new,)), y_new)
+                  - l_new_ref).abs()
+        lt = lt_old + lt_new
+
+        # Frobenius regularisation
+        lora_reg = sum((lp['B'] @ lp['A']).pow(2).sum() for lp in lora_list)
+
+        total_loss = lt_weight * lt - cos_sim_val + reg_lambda * lora_reg
+
+        history['cos_sim'].append(cos_sim_val.item())
+        history['lt'].append(lt.item())
+        with torch.no_grad():
+            dn = sum((lp['B'] @ lp['A']).norm().item() for lp in lora_list)
+        history['delta_norm'].append(dn)
+
+        opt_lora.zero_grad()
+        total_loss.backward()
+        opt_lora.step()
+
+    # Merge LoRA into network weights
+    with torch.no_grad():
+        final_state = net.state_dict()
+        for lp in lora_list:
+            delta = lp['B'] @ lp['A']
+            if lp['type'] == 'conv':
+                delta = delta.reshape(*lp['shape'])
+            final_state[lp['weight_key']] = (
+                original_state[lp['weight_key']].to(device) + delta.detach()
+            )
+        net.load_state_dict(final_state)
+
+    if history['cos_sim']:
+        logging.info(
+            f"[Teleport-Online] {n_steps} steps: "
+            f"cos_sim {history['cos_sim'][0]:.3f}→{history['cos_sim'][-1]:.3f}  "
+            f"lt={history['lt'][-1]:.4f}  delta_norm={history['delta_norm'][-1]:.4f}"
+        )
+
+    net.train(was_training)
+    return history
+
+
 def add_teleportation_args(parser) -> None:
     """Add teleportation-related command-line arguments."""
     group = parser.add_argument_group(
@@ -733,8 +945,9 @@ def add_teleportation_args(parser) -> None:
     group.add_argument('--teleport_memory_per_task', type=int, default=256,
                        help='Samples stored per task for teleportation gradient computation.')
     group.add_argument('--teleport_mode', type=str, default='scaling',
-                       choices=['scaling', 'lora'],
-                       help='Teleportation mode: "scaling" (ReLU symmetry) or "lora" (COST-style).')
+                       choices=['scaling', 'lora', 'repair', 'online'],
+                       help='Teleportation mode: "scaling" (ReLU symmetry), "lora" (COST-style), '
+                            '"repair" (post-task LoRA repair), or "online" (mid-training conflict detection).')
     group.add_argument('--teleport_lora_rank', type=int, default=4,
                        help='LoRA rank for COST-style teleportation.')
     group.add_argument('--teleport_gamma', type=float, default=1.0,
@@ -743,3 +956,14 @@ def add_teleportation_args(parser) -> None:
                        help='Perturbation radius δ for sharpness estimation in LoRA mode.')
     group.add_argument('--teleport_htr', type=int, default=0, choices=[0, 1],
                        help='Enable Historical Trajectory Reuse (HTR) after LoRA teleportation.')
+    # Online teleportation arguments (teleport_mode=online)
+    group.add_argument('--teleport_check_freq', type=int, default=50,
+                       help='[online mode] Check gradient conflict every N training steps.')
+    group.add_argument('--teleport_online_steps', type=int, default=5,
+                       help='[online mode] LoRA optimisation steps per online teleportation event.')
+    group.add_argument('--teleport_conflict_threshold', type=float, default=0.0,
+                       help='[online mode] Trigger teleportation when cos_sim(g_new, g_old) < threshold.')
+    group.add_argument('--teleport_lt_weight', type=float, default=1.0,
+                       help='[online mode] Weight for L_t (loss invariance) term in online teleportation.')
+    group.add_argument('--teleport_approx_layers', type=int, default=2,
+                       help='[online mode] Number of last layers used for fast gradient conflict detection.')
