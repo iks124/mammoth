@@ -1,0 +1,388 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[numbers,sort]{natbib}
+\usepackage{url}
+\usepackage{color}
+\usepackage{array}
+
+% Page layout (manual, no geometry package)
+\setlength{\textwidth}{16cm}
+\setlength{\textheight}{24cm}
+\setlength{\oddsidemargin}{0cm}
+\setlength{\topmargin}{-1cm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+% Approximate booktabs
+\newcommand{\toprule}{\hline\hline}
+\newcommand{\midrule}{\hline}
+\newcommand{\bottomrule}{\hline\hline}
+
+% Custom macros
+\newcommand{\method}{LoRA-Teleport}
+\newcommand{\eg}{e.g.,~}
+\newcommand{\ie}{i.e.,~}
+\newcommand{\etal}{\textit{et al.}~}
+\newcommand{\cossim}{\mathrm{cos\_sim}}
+\newcommand{\PLACEHOLDER}[1]{\textcolor{red}{[PLACEHOLDER: #1]}}
+
+\definecolor{red}{rgb}{0.8,0,0}
+
+% =============================================================
+\title{\textbf{Why Gradient Alignment Teleportation Fails in Sequential\\
+       Continual Learning: A Mechanistic Study}}
+
+\author{Anonymous Author(s) \\ \textit{Submitted for blind review}}
+
+\date{}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+% =============================================================
+\begin{abstract}
+% =============================================================
+We present a systematic empirical study of LoRA-based gradient alignment teleportation
+for sequential continual learning (CL), adapting the recently proposed COST
+framework~\citep{zhou2025cost} from multi-task to sequential settings.
+Catastrophic forgetting remains a central challenge in CL, and gradient conflict between
+old and new tasks is widely hypothesized as a proximal cause---yet direct manipulation
+of gradient alignment during training has not been rigorously tested in the sequential regime.
+We implement an online teleportation mechanism that detects gradient conflict at each
+training step and applies LoRA perturbations to find loss-equivalent parameter configurations
+with better gradient alignment.
+Across six hyperparameter configurations on seq-CIFAR-10, all online teleportation variants
+\emph{hurt} accuracy relative to a vanilla Experience Replay baseline ($-1.6\%$ to $-31.6\%$).
+We identify a structural \emph{zero-order trap}: achieving loss invariance on one batch
+requires large parameter perturbations ($\|\Delta\Theta\| = 25$--$30$) that catastrophically
+disrupt the training trajectory---better loss invariance produces \emph{worse} accuracy.
+A companion experiment further reveals that gradient conflict is \emph{ubiquitous} in 78.9\%
+of training steps, providing insufficient discriminating signal to guide teleportation.
+These findings constitute a rigorous negative result with a mechanistic explanation
+of why LoRA teleportation fails in the sequential regime.
+\end{abstract}
+
+% =============================================================
+\section{Introduction}
+\label{sec:intro}
+% =============================================================
+
+Catastrophic forgetting---the rapid degradation of previously learned knowledge when a
+neural network is trained on a new task---remains one of the core obstacles in continual
+learning~\citep{kirkpatrick2017ewc, vandeven2022survey}.
+A prominent hypothesis attributes forgetting to \emph{gradient conflict}: when the gradient
+of the current task opposes that of old tasks, parameter updates that benefit new-task
+performance necessarily degrade old-task performance~\citep{lopezpaz2017gem, yu2020pcgrad}.
+
+This conflict hypothesis has motivated two main lines of work.
+\emph{Constraint-based} methods (\eg GEM~\citep{lopezpaz2017gem}, A-GEM~\citep{chaudhry2019agem})
+project current-task gradients to avoid increasing the replay-buffer loss.
+\emph{Surgery-based} methods (\eg PCGrad~\citep{yu2020pcgrad}) modify gradient directions
+to reduce inter-task conflict.
+Both operate at the gradient level---altering how the optimizer steps.
+
+A third possibility is \emph{parameter-space teleportation}: instead of modifying the gradient step,
+find a loss-equivalent point in parameter space from which the gradient is naturally better aligned.
+This idea was formalized by \citet{zhao2022teleport} and extended to multi-task learning (MTL) by
+\citet{zhou2025cost} (COST), which uses low-rank adapters (LoRA) to efficiently find such points.
+COST demonstrates strong results on simultaneous MTL benchmarks.
+
+\textbf{This paper.}
+We ask whether gradient alignment teleportation can reduce catastrophic forgetting in
+\emph{sequential} CL, where old tasks are inaccessible and conflict is detected only
+through a small replay buffer.
+We implement an online variant (\method) and conduct a systematic sweep over
+hyperparameters on seq-CIFAR-10.
+
+\textbf{Contributions:}
+\begin{itemize}
+  \item \textbf{All six teleportation configurations hurt accuracy}
+        ($-1.6\%$ to $-31.6\%$ vs.~ER baseline), ruling out hyperparameter explanations.
+  \item \textbf{Zero-order trap:} the loss-invariance constraint forces
+        $\|\Delta\Theta\| = 25$--$30$, disrupting the training trajectory through all
+        non-target batches. Better loss invariance produces \emph{worse} accuracy.
+  \item \textbf{Ubiquitous conflict:} 78.9\% of training steps exhibit
+        $\cossim(g_\mathrm{old}, g_\mathrm{new}) < 0$.
+        Pooled correlation with forgetting is $r = -0.25$ (weak, inconsistent across seeds),
+        suggesting mini-batch $\cossim$ is not a reliable signal for teleportation decisions.
+\end{itemize}
+
+% =============================================================
+\section{Background}
+\label{sec:background}
+% =============================================================
+
+\paragraph{Sequential continual learning.}
+In class-incremental learning (Class-IL), a model observes tasks $1, \ldots, T$ sequentially.
+At test time it must classify across all seen classes with no task identity given.
+Experience Replay (ER)~\citep{rolnick2019er} stores a buffer of past samples mixed with
+current-task data. We use ER as the base method throughout.
+
+\paragraph{Gradient conflict.}
+For parameters $\theta$, conflict occurs when
+$\cossim(g_i, g_j) < 0$ where $g_k = \nabla_\theta \mathcal{L}_k(\theta)$.
+GEM~\citep{lopezpaz2017gem} enforces $g^\top g_k \geq 0$ for buffered tasks per step.
+PCGrad~\citep{yu2020pcgrad} projects conflicting gradients onto each other's normal plane.
+
+\paragraph{Symmetry teleportation.}
+\citet{zhao2022teleport} exploit ReLU scaling symmetries to teleport to better-conditioned
+points on the loss manifold while preserving the loss.
+COST~\citep{zhou2025cost} extends this to LoRA perturbations in MTL,
+minimizing gradient conflict while preserving per-task loss.
+
+\paragraph{LoRA.}
+Low-Rank Adaptation~\citep{hu2022lora} parameterizes $\Delta W = BA$ with
+$B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times d}$, $r \ll d$.
+After optimization, the LoRA is merged: $W \leftarrow W + BA$.
+
+% =============================================================
+\section{Method: Online LoRA Teleportation}
+\label{sec:method}
+% =============================================================
+
+At each training step $s$ we draw a current-task batch $(x_\mathrm{new}, y_\mathrm{new})$
+and an old-task batch $(x_\mathrm{old}, y_\mathrm{old})$ from a persistent replay iterator.
+We compute gradient conflict via
+\begin{equation}
+  \cossim_s = \frac{g_\mathrm{old}^\top g_\mathrm{new}}{\|g_\mathrm{old}\|\|g_\mathrm{new}\| + \varepsilon}
+  \label{eq:cossim}
+\end{equation}
+on the last $L=2$ layers (for efficiency). When $\cossim_s < \tau$, we optimize
+rank-$r$ LoRA perturbations $\Delta\Theta = \sum_l B_l A_l$ via:
+\begin{align}
+  \mathcal{L}_\mathrm{teleport} &= \lambda_t \cdot \mathcal{L}_t
+    - \cossim(\theta + \Delta\Theta)
+    + \lambda_r \|\Delta\Theta\|_F^2
+  \label{eq:teleport_obj} \\
+  \mathcal{L}_t &= \big|\mathcal{L}(\theta{+}\Delta\Theta, x_\mathrm{old}) - \mathcal{L}(\theta, x_\mathrm{old})\big|
+    + \big|\mathcal{L}(\theta{+}\Delta\Theta, x_\mathrm{new}) - \mathcal{L}(\theta, x_\mathrm{new})\big|
+    \label{eq:lt}
+\end{align}
+where $\mathcal{L}_t$ is the \emph{loss invariance} term (zero means the perturbation is
+loss-neutral on both batches) and $\lambda_t$ is its weight.
+The cosine term in Eq.~\ref{eq:teleport_obj} requires second-order gradients.
+After $n$ optimization steps, the LoRA is merged back into $\theta$.
+
+% =============================================================
+\section{Experiments: All Teleportation Variants Fail}
+\label{sec:h7}
+% =============================================================
+
+\textbf{Setup.}
+seq-CIFAR-10 (5 tasks, 2 classes/task), Class-IL protocol, ResNet-18.
+Optimizer: SGD, lr=0.1, 10 epochs/task, seed=42.
+ER baseline (buffer=500): 58.53\% Class-IL.
+We sweep: check\_freq $\in \{1, 10\}$, $\lambda_t \in \{1, 10, 50\}$, $n \in \{5, 10, 20\}$;
+rank-2 LoRA on the last 2 layers.
+
+\begin{table}[t]
+\centering
+\caption{Online \method\ variants on seq-CIFAR-10 (Class-IL accuracy).
+All variants underperform ER.
+\textbf{E6 achieves the lowest avg\_lt yet the worst accuracy}---the zero-order trap.}
+\label{tab:h7}
+\begin{tabular}{|l|l|c|c|c|c|c|}
+\toprule
+Exp & Description & Class-IL $\uparrow$ & $\Delta$ & Triggers & avg\_lt $\downarrow$ & $\|\Delta\Theta\|$ \\
+\midrule
+E0 & ER (baseline)                     & \textbf{58.53\%} & ---        & 0    & ---  & ---   \\
+\midrule
+E5 & freq=10, $\lambda_t$=50, $n$=10   & 56.90\%          & $-1.63\%$  & 972  & 1.73 & 9--13 \\
+E3 & freq=10, $\lambda_t$=1,  $n$=5    & 56.25\%          & $-2.28\%$  & 850  & 5.67 & 4--6  \\
+E4 & freq=10, $\lambda_t$=10, $n$=10   & 53.51\%          & $-5.02\%$  & 927  & 1.92 & 9--13 \\
+E2 & freq=1,  $\tau$=$-0.3$            & 48.87\%          & $-9.66\%$  & 1834 & 4.80 & ---   \\
+E6 & freq=10, $\lambda_t$=10, $n$=20   & 48.22\%          & $-10.31\%$ & 1140 & \textbf{0.46} & 25--30 \\
+E1 & freq=1,  $\lambda_t$=1,  $n$=5    & 26.93\%          & $-31.60\%$ & 4419 & ---  & ---   \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:h7} shows all six configurations fall below ER.
+The best variant (E5) is still $-1.63\%$ below baseline.
+Increasing check\_freq to 1 is catastrophic ($-31.6\%$, 12$\times$ training slowdown).
+
+\subsection{The Zero-Order Trap}
+
+\textbf{E6 is the diagnostic case.}
+With $\lambda_t = 10$ and $n=20$ steps, E6 achieves avg\_lt $= 0.46$---loss invariance
+is working as intended.
+Yet E6 produces the \emph{worst accuracy} among freq=10 variants ($-10.3\%$).
+
+To satisfy $\mathcal{L}_t \approx 0$ on the target batch, the optimizer finds
+$\|\Delta\Theta\| = 25$--$30$, compared to $4$--$6$ in the unconstrained regime.
+This large perturbation is loss-neutral only at the specific target point $x^*$;
+for any other batch $x \neq x^*$, the perturbation induces unpredictable loss changes.
+With 3{,}130 batches per task, the training trajectory is corrupted by each teleportation event.
+
+\begin{table}[h]
+\centering
+\caption{The zero-order trap: no regime simultaneously achieves small $\mathcal{L}_t$ and small $\|\Delta\Theta\|$.}
+\label{tab:trap}
+\begin{tabular}{|l|c|c|l|}
+\toprule
+Regime & avg\_lt & $\|\Delta\Theta\|$ & Net effect \\
+\midrule
+Unconstrained ($\lambda_t=1$)          & 5.67 & 4--6   & Target batch loss disrupted \\
+Moderate ($\lambda_t=50$)              & 1.73 & 9--13  & Partial trajectory disruption \\
+Strongly constrained ($\lambda_t=10$, $n$=20) & \textbf{0.46} & 25--30 & All other batches disrupted \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:trap} shows there is no viable middle ground with rank-2 LoRA in 5--20 steps.
+This is a structural constraint: the low-rank parameter space cannot simultaneously satisfy
+the loss invariance constraint and find a small-norm $\Delta\Theta$ that improves alignment.
+
+% =============================================================
+\section{Analysis: Is Gradient Conflict the Right Target?}
+\label{sec:h8}
+% =============================================================
+
+The failure of teleportation motivates a more fundamental question: is gradient conflict
+a reliable signal for forgetting risk, or is it too ubiquitous and noisy to guide per-step decisions?
+
+\textbf{Setup.}
+We introduce a \emph{detect-only} mode: teleportation is disabled ($\tau=100$, never triggered),
+while $\cossim_s$ is logged at every check step.
+Three seeds (42, 123, 456) on seq-CIFAR-10 ER (10 epochs/task), check\_freq=10,
+yielding 313 measurements per eligible task.
+We compute per-task forgetting $f_t = \text{peak\_acc}_t - \text{final\_acc}_t$ and
+Pearson $r$ between mean $\cossim_t$ per task and $f_t$.
+
+\begin{table}[t]
+\centering
+\caption{Mean $\cossim(g_\mathrm{old}, g_\mathrm{new})$ during seq-CIFAR-10 ER training.
+Parentheses: fraction of steps with $\cossim < 0$.}
+\label{tab:h8_cossim}
+\begin{tabular}{|l|c|c|c|c|c|}
+\toprule
+Seed & Task 1 & Task 2 & Task 3 & Task 4 & Mean neg. \\
+\midrule
+42  & $-0.173$ (70.6\%) & $-0.252$ (83.1\%) & $-0.214$ (77.0\%) & $-0.133$ (75.1\%) & 76.5\% \\
+123 & $-0.179$ (73.2\%) & $-0.216$ (78.6\%) & $-0.304$ (89.1\%) & $-0.155$ (78.3\%) & 79.8\% \\
+456 & $-0.234$ (80.8\%) & $-0.221$ (79.6\%) & $-0.268$ (84.7\%) & $-0.131$ (76.4\%) & 80.4\% \\
+\midrule
+\textbf{Mean} & $-0.195$ & $-0.230$ & $-0.262$ & $-0.140$ & \textbf{78.9\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Gradient conflict is ubiquitous.}
+Table~\ref{tab:h8_cossim}: \textbf{78.9\% of all training steps exhibit gradient conflict}.
+This is consistent with \citet{liu2026gradconflict}'s finding that 50--75\% of neurons
+show conflicting gradient directions in LLM fine-tuning.
+The mean $\cossim$ varies only from $-0.13$ to $-0.30$ across tasks and seeds
+(a 0.17-unit range), leaving very little discriminating signal.
+
+\textbf{Correlation is weak and inconsistent.}
+
+\begin{table}[h]
+\centering
+\caption{Pearson $r$ between mean $\cossim$ per task and per-task forgetting.
+Direct: $r(\bar{c}_t, f_t)$. Cross: $r(\bar{c}_t, f_{t-1})$.
+Pooled uses 12 data points (3 seeds $\times$ 4 tasks).}
+\label{tab:h8_corr}
+\begin{tabular}{|l|c|c|l|}
+\toprule
+Seed & $r$ (direct) & $r$ (cross-task) & Verdict \\
+\midrule
+42  & $-0.43$ & $-0.73$ & Weakly supported \\
+123 & $-0.01$ & $-0.32$ & Not supported    \\
+456 & $-0.54$ & $+0.08$ & Mixed            \\
+\midrule
+\textbf{Pooled} & $\mathbf{-0.25}$ & --- & Inconclusive \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pooled $r = -0.25$ (Table~\ref{tab:h8_corr}) is weakly negative but highly inconsistent.
+Two confounds limit interpretation:
+(1) \emph{Task-order confound}: later tasks always incur less forgetting and face slightly
+    less conflict (fewer old tasks in buffer), creating a spurious negative correlation.
+(2) \emph{Insufficient variance}: the 0.17-unit range of mean $\cossim$ provides too little
+    signal to separate causal from confounded effects with only 4 tasks per seed.
+
+% =============================================================
+\section{Related Work}
+\label{sec:related}
+% =============================================================
+
+\textbf{Replay-based CL.}
+ER~\citep{rolnick2019er} and DER~\citep{buzzega2020der} mix past samples with current training.
+We use ER as our base and augment it with teleportation.
+
+\textbf{Gradient-based forgetting mitigation.}
+GEM~\citep{lopezpaz2017gem} and A-GEM~\citep{chaudhry2019agem} provide \emph{first-order}
+per-step guarantees by constraining gradient directions.
+Our teleportation seeks a \emph{zero-order} batch-level guarantee.
+The zero-order trap suggests first-order methods may be more robust: they modify only
+the step direction, not the parameter value, and do not require compensating scale.
+
+\textbf{Multi-task gradient surgery.}
+PCGrad~\citep{yu2020pcgrad} projects conflicting gradients in the MTL setting.
+MTL's simultaneous task access makes exact loss evaluation possible, avoiding the
+replay-sampling noise that amplifies the zero-order trap.
+
+\textbf{Symmetry teleportation.}
+COST~\citep{zhou2025cost} evaluates loss on all tasks simultaneously in MTL;
+our sequential setting must approximate old-task loss via a small replay buffer.
+This approximation error interacts fatally with the zero-order constraint.
+
+\textbf{Gradient similarity and forgetting.}
+\citet{liu2026gradconflict} freeze conflicting neurons (50--75\% in LLMs) and reduce
+forgetting by 59--82\%.
+Their neuron-level approach is complementary to ours: freezing is a first-order-like
+modification (don't update conflicting parameters), whereas teleportation is a zero-order
+modification (change parameter values while preserving loss).
+Our H8 result suggests that coarser mini-batch $\cossim$ does not have the resolution
+needed for step-by-step teleportation decisions.
+
+% =============================================================
+\section{Limitations}
+\label{sec:limitations}
+% =============================================================
+
+\textbf{Benchmark scope.} All experiments use seq-CIFAR-10 (5 tasks, ResNet-18).
+Generalization to longer sequences, transformer architectures, or LLM fine-tuning is not confirmed.
+
+\textbf{Low-rank budget.} Rank-2 LoRA with 5--20 steps may be insufficient.
+Higher ranks might reduce $\|\Delta\Theta\|$---at substantially higher compute cost
+(second-order gradients scale with rank).
+
+\textbf{Statistical power.} With 4 eligible tasks per seed, correlation analysis has
+12 pooled data points. Longer task sequences would give more reliable estimates.
+
+\textbf{Alternative conflict signals.} Per-neuron conflict~\citep{liu2026gradconflict}
+or accumulated trajectory cosine similarity might be more discriminative than per-step mini-batch $\cossim$.
+
+% =============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% =============================================================
+
+We present a rigorous negative result: LoRA-based gradient alignment teleportation fails
+in sequential continual learning. Two structural barriers account for the failure.
+
+\textbf{The zero-order trap:} Loss invariance on a single batch forces
+$\|\Delta\Theta\| = 25$--$30$, disrupting the training trajectory through all non-target batches.
+The configuration with the best loss invariance (avg\_lt $= 0.46$) produces the worst accuracy.
+This creates an inescapable dilemma: either enforce loss invariance and corrupt the trajectory,
+or relax it and allow the optimizer to sacrifice it for $\cossim$ gain.
+
+\textbf{Ubiquitous conflict:} 78.9\% of training steps show gradient conflict.
+The low variance in mean $\cossim$ per task (0.17 units, pooled $r = -0.25$, high seed variance)
+shows that mini-batch $\cossim$ cannot reliably guide per-step teleportation.
+
+These findings do not contradict the gradient conflict hypothesis at the neuron level.
+They identify \emph{parameter-space teleportation} as an ineffective vehicle for conflict
+reduction in the sequential CL regime.
+Future work might explore first-order gradient projection for sequential CL,
+or neuron-level selective approaches inspired by~\citet{liu2026gradconflict},
+as alternatives that avoid the zero-order trap.
+
+\bibliographystyle{plainnat}
+\bibliography{bibliography}
+
+\end{document}

@@ -1,0 +1,90 @@
+\begin{thebibliography}{11}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Buzzega et~al.(2020)Buzzega, Boschini, Porrello, Abati, and
+  Calderara]{buzzega2020der}
+Pietro Buzzega, Matteo Boschini, Angelo Porrello, Davide Abati, and Simone
+  Calderara.
+\newblock Dark experience for general continual learning: a strong, simple
+  baseline.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~33, pages 15920--15930, 2020.
+
+\bibitem[Chaudhry et~al.(2019)Chaudhry, Ranzato, Rohrbach, and
+  Elhoseiny]{chaudhry2019agem}
+Arslan Chaudhry, Marc'Aurelio Ranzato, Marcus Rohrbach, and Mohamed Elhoseiny.
+\newblock Efficient lifelong learning with {A-GEM}.
+\newblock In \emph{International Conference on Learning Representations}, 2019.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{hu2022lora}
+Edward~J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+  Wang, Lu~Wang, and Weizhu Chen.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations}, 2022.
+
+\bibitem[Kirkpatrick et~al.(2017)Kirkpatrick, Pascanu, Rabinowitz, Veness,
+  Desjardins, Rusu, Milan, Quan, Ramalho, Grabska-Barwinska,
+  et~al.]{kirkpatrick2017ewc}
+James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel Veness, Guillaume
+  Desjardins, Andrei~A Rusu, Kieran Milan, John Quan, Tiago Ramalho, Agnieszka
+  Grabska-Barwinska, et~al.
+\newblock Overcoming catastrophic forgetting in neural networks.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 114\penalty0
+  (13):\penalty0 3521--3526, 2017.
+\newblock \doi{10.1073/pnas.1611835114}.
+
+\bibitem[Liu et~al.(2026)]{liu2026gradconflict}
+Ye~Liu et~al.
+\newblock Learning the mechanism of catastrophic forgetting: A perspective from
+  gradient similarity.
+\newblock \emph{arXiv preprint arXiv:2601.21577}, 2026.
+
+\bibitem[Lopez-Paz and Ranzato(2017)]{lopezpaz2017gem}
+David Lopez-Paz and Marc'Aurelio Ranzato.
+\newblock Gradient episodic memory for continual learning.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~30, 2017.
+
+\bibitem[Rolnick et~al.(2019)Rolnick, Ahuja, Schwarz, Lillicrap, and
+  Wayne]{rolnick2019er}
+David Rolnick, Arun Ahuja, Jonathan Schwarz, Timothy Lillicrap, and Gregory
+  Wayne.
+\newblock Experience replay for continual learning.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~32, 2019.
+
+\bibitem[van~de Ven et~al.(2022)van~de Ven, Tuytelaars, and
+  Tolias]{vandeven2022survey}
+Gido~M van~de Ven, Tinne Tuytelaars, and Andreas~S Tolias.
+\newblock Three types of incremental learning.
+\newblock \emph{Nature Machine Intelligence}, 4\penalty0 (12):\penalty0
+  1185--1197, 2022.
+\newblock \doi{10.1038/s42256-022-00568-3}.
+
+\bibitem[Yu et~al.(2020)Yu, Kumar, Gupta, Levine, Hausman, and
+  Finn]{yu2020pcgrad}
+Tianhe Yu, Saurabh Kumar, Abhishek Gupta, Sergey Levine, Karol Hausman, and
+  Chelsea Finn.
+\newblock Gradient surgery for multi-task learning.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~33, pages 5824--5836, 2020.
+
+\bibitem[Zhao et~al.(2022)Zhao, Ganev, Walters, Yu, and
+  Dehmamy]{zhao2022teleport}
+Bo~Zhao, Iordan Ganev, Robin Walters, Rose Yu, and Nima Dehmamy.
+\newblock Symmetry teleportation for accelerated optimization.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~35, 2022.
+
+\bibitem[Zhou et~al.(2025)]{zhou2025cost}
+Hao Zhou et~al.
+\newblock Continual optimization with symmetry teleportation for multi-task
+  learning.
+\newblock \emph{arXiv preprint arXiv:2503.04046}, 2025.
+
+\end{thebibliography}
