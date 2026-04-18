@@ -1,0 +1,4 @@
+exp_id,lora_rank,lt_weight,n_steps,check_freq,class_il,triggers,cos_pos_rate,mean_cos_improve,avg_delta_norm,notes
+E5_ref,4,50.0,10,10,56.90,972,0.475,0.025,7,H7 E5 reference
+E_rank8,8,50.0,10,10,29.13,647,0.625,0.323,13,higher rank worsens acc despite better cos_improve
+E_rank16,16,50.0,10,10,43.02,972,0.500,0.120,50,even larger delta_norm; still worse than baseline
