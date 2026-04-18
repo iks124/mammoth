@@ -1,0 +1,3 @@
+exp_id,model,teleport,freq,class_il,task_il,total_checks,triggers,trigger_rate,cos_pos_rate,mean_cos_improve,mean_lt,lt_gt1_rate,lt_lt01_rate,max_lt,notes
+SGD_base,sgd,no,—,19.45,66.46,0,0,—,—,—,—,—,—,—,pure finetuning baseline; severe forgetting
+SGD_f10,sgd,yes,10,19.56,73.24,1252,792,0.633,0.867,0.0163,0.0437,0.000,0.902,0.1753,teleport_lr=0.001 rank=4 lt200; mechanism works but negligible improvement

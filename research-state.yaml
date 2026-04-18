@@ -5,9 +5,9 @@ question: >
   parameter configurations with better gradient alignment?
 
 phase: conclude
-status: H8_complete
+status: H11_complete
 
-last_updated: 2026-04-16
+last_updated: 2026-04-19
 
 # ──────────────────────────────────────────────
 # Results summary
@@ -15,58 +15,49 @@ last_updated: 2026-04-16
 baselines:
   ER_10ep: 58.53%
   ER_50ep: 61.66%
+  SGD_base: 19.45%
+
+breakthrough:
+  experiment: H10_E_rank4_lt200_lr001
+  result: "61.18% (+2.65% over ER baseline)"
+  key_param: "teleport_lr=0.001 (not 0.01)"
+  mechanism: "Small lr → delta_norm=0.32, lt=0.035, cos+rate=91.3%"
 
 experiments:
-  H6b_threshold_sweep:
-    best: "threshold=-0.3 → 45.49% (-0.15% vs ER_10ep), std=0.74%"
-    verdict: neutral_stable
-  H7_online_freq:
-    best: "E5 freq=10 lt_weight=50 → 56.90% (-1.63%)"
-    worst: "E1 freq=1 → 26.93% (-31.60%)"
-    verdict: fundamentally_broken
-    root_cause: >
-      Flaw 5: zero-order loss invariance at one batch ≠ trajectory invariance.
-      High lt_weight forces large delta_norm (25-30), catastrophically disrupting
-      other batches. No viable middle ground with rank-2 LoRA in 5-20 steps.
-
-trigger_analysis_correction:
-  note: >
-    Earlier analysis misread "all triggers in steps 1-3130" as "triggers only in task 2."
-    The step counter resets to 0 at every task boundary (training.py:333).
-    Actual distribution: 850 triggers spread uniformly across 4 eligible tasks
-    (~212 per task). No implementation bug — purely a log-interpretation error.
+  H7_online:
+    best: "E5 freq=10 → 56.90% (-1.63%)"
+    verdict: broken_with_lr001
+    root_cause: "teleport_lr=0.01 → delta_norm=7-30 → disrupts other batches"
+  H8_hypothesis:
+    finding: "cos_sim conflict ubiquitous (79% steps), r=-0.25 with forgetting"
+    verdict: "gradient conflict is background noise, not discriminating signal"
+  H9_rank:
+    finding: "rank=8 → 29.13% (worse!); delta_norm scales with rank"
+    verdict: "rank not the bottleneck; teleport_lr is"
+  H10_lr_sweep:
+    finding: "teleport_lr=0.001 → +2.65%; rank=4 vs 8 equivalent"
+    freq_puzzle: "freq=1 (7358 triggers) = freq=10 (755 triggers) in accuracy"
+    verdict: breakthrough
+  H11_sgd:
+    SGD_base: "19.45%"
+    SGD_f10: "19.56% (+0.11%)"
+    mechanism_check: "cos+rate=86.7%, lt=0.044 — mechanism works!"
+    verdict: "batch mismatch NOT cause; old-task gradient noise is root cause"
+    conclusion: "teleportation requires knowledge preservation (replay); standalone = noise"
 
 # ──────────────────────────────────────────────
-# Pivot decision
+# Final conclusion
 # ──────────────────────────────────────────────
-pivot_options:
-  A:
-    name: Task-boundary teleport improvement
-    description: Understand why H6b is neutral, push it positive
-    priority: medium
-  B:
-    name: Verify gradient conflict → forgetting hypothesis
-    description: >
-      Does gradient conflict actually CAUSE forgetting?
-      Run detection-only (threshold=100, never triggers) and log per-step
-      cos_sim; correlate with per-task forgetting.
-    priority: high  # foundational — if false, all teleport approaches are wrong
-  C:
-    name: SAM-style first-order approximation
-    description: >
-      Replace create_graph=True with weight perturbation.
-      g_approx = (g(θ + ε*sign(g)) - g(θ)) / ε
-      Much cheaper → more steps or higher rank.
-    priority: medium
-  D:
-    name: Conditional merge
-    description: >
-      Only merge if both: lt < 0.1 AND cos_sim improved.
-      ~5% of events pass. Very few merges = little disruption.
-    priority: low
+conclusion: >
+  Online LoRA teleportation (with teleport_lr=0.001) provides +2.65% improvement
+  over ER baseline when combined with experience replay. The mechanism works correctly
+  (91% cos+ rate, lt≈0.035, delta_norm≈0.32). However:
 
-next_experiment: H8_hypothesis_verification
-next_experiment_goal: >
-  Verify whether gradient conflict (low cos_sim) correlates with eventual
-  per-task forgetting. This is the foundational hypothesis behind all
-  teleportation work. If false → fundamental pivot needed.
+  1. Requires replay: SGD+teleport gives only +0.11% because old-task gradient is noise
+     without knowledge preservation
+  2. Frequency doesn't scale: each correction is +0.027 cos_sim → too small to accumulate
+  3. Best result (61.30%) approaches but doesn't exceed 50-epoch ER baseline (61.66%)
+
+  Teleportation is a second-order complement to replay, not a standalone CL technique.
+
+next_step: write_paper

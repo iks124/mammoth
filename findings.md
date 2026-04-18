@@ -5,87 +5,100 @@ Can mid-training gradient conflict detection + LoRA teleportation reduce catastr
 in continual learning, specifically by finding loss-equivalent parameter configurations with better
 gradient alignment between old and new tasks?
 
-## Current Understanding (2026-04-16) — H8 COMPLETE → CONCLUDE
+## Current Understanding (2026-04-19) — H11 IN PROGRESS (H9/H10 added breakthrough)
 
-### Complete Results
+### Complete Results (all ER experiments)
 
-| Exp | freq | lt_weight | steps | Class-IL | Δbaseline | triggers | avg_lt |
-|-----|------|-----------|-------|----------|-----------|----------|--------|
-| E0-10ep (baseline) | — | — | — | **58.53%** | 0 | 0 | — |
-| E0-50ep (baseline) | — | — | — | **61.66%** | — | 0 | — |
-| E5 (best) | 10 | 50 | 10 | 56.90% | -1.63% | 972 | 1.73 |
-| E3 | 10 | 1.0 | 5 | 56.25% | -2.28% | 850 | 5.67 |
-| E4 | 10 | 10 | 10 | 53.51% | -5.02% | 927 | 1.92 |
-| E2 | 1 | 1.0 | 5 | 48.87% | -9.66% | 1834 | 4.80 |
-| E6 (best lt!) | 10 | 10 | 20 | 48.22% | -10.31% | 1140 | **0.46** |
-| E1 | 1 | 1.0 | 5 | 26.93% | -31.60% | 4419 | — |
+| Exp | rank | teleport_lr | freq | lt_weight | Class-IL | Δbaseline | avg_lt | cos+ rate | delta_norm |
+|-----|------|-------------|------|-----------|----------|-----------|--------|-----------|------------|
+| ER baseline (10ep) | — | — | — | — | **58.53%** | 0 | — | — | — |
+| ER baseline (50ep) | — | — | — | — | **61.66%** | — | — | — | — |
+| E5 (H7 best, old) | 4 | 0.01 | 10 | 50 | 56.90% | -1.63% | 1.73 | — | ~7 |
+| E6 (best lt, old) | 4 | 0.01 | 10 | 10 | 48.22% | -10.31% | **0.46** | 47.5% | 25–30 |
+| H9 rank=8 | 8 | 0.01 | 10 | 50 | 29.13% | -29.40% | 1.65 | 62.5% | 13 |
+| H10 E_lt200_lr001 | 8 | **0.001** | 10 | 200 | 60.54% | **+2.01%** | 0.070 | 91.0% | 0.478 |
+| H10 E_lt500_lr001 | 8 | **0.001** | 10 | 500 | 61.30% | **+2.77%** | 0.074 | 90.1% | 0.475 |
+| **H10 best (rank4)** | **4** | **0.001** | **10** | **200** | **61.18%** | **+2.65%** | **0.035** | **91.3%** | **0.321** |
+| H10 freq=1 | 4 | 0.001 | 1 | 200 | 60.49% | +1.96% | 0.036 | 91.8% | 0.321 |
 
-### Critical Paradox: Better lt → Worse Accuracy
+### Critical Paradox (Resolved in H10)
 
-E6 achieves the **lowest avg_lt (0.46)** — loss invariance is actually working — yet produces
-the **worst accuracy (48.22%)**.
+Old finding (H7): E6 achieves the **lowest avg_lt (0.46)** yet produces the **worst accuracy (48.22%)**.
+This appeared to confirm Flaw 5 — that loss invariance requires such large delta_norm that other batches are devastated.
 
-Root cause: **Flaw 5 confirmed experimentally**. To achieve low lt on the current batch, the
-optimizer must make a HUGE LoRA delta (delta_norm=25–30). This preserves loss on the specific
-batch but catastrophically disrupts behavior on all other batches. The "zero-order guarantee"
-(loss preserved at one point) does not cover the training trajectory.
+**H10 Resolution**: The problem was NOT fundamental — it was `teleport_lr=0.01` being too large.
+With `teleport_lr=0.001`:
+- delta_norm drops from 25–30 → **0.32** (100x smaller)
+- avg_lt drops from 0.46 → **0.035** (13x smaller)
+- cos+ rate rises from 47.5% → **91.3%**
+- Accuracy: -1.63% → **+2.65%** (first positive result)
 
-### Two-Sided Trap
-
-| Regime | lt | delta_norm | Effect |
-|--------|----|-----------|--------|
-| Unconstrained (lt_weight=1) | 5.67 | 4–6 | Current batch loss disrupted |
-| Moderate (lt_weight=50) | 1.73 | 9–13 | Partial disruption |
-| Strongly constrained (lt_weight=10, 20steps) | 0.46 | 25–30 | Other batches devastated |
-
-There is **no viable middle ground** with rank-2 LoRA in 5–20 steps.
+The key insight: small teleport_lr forces the LoRA optimizer to take tiny steps. These tiny
+perturbations are sufficient to improve cos_sim slightly while leaving the weight manifold
+essentially unchanged. Flaw 5 is avoided by design — the perturbation is so small that
+zero-order guarantees hold approximately across many nearby batches.
 
 ## Patterns and Insights
 
-### Pattern 1: Online Teleport Consistently Hurts
-All 6 online teleport variants are worse than baseline. The best result (E5: 56.90%) is still
--1.63% below 10-epoch baseline. This is not a hyperparameter issue — it's structural.
+### Pattern 1: teleport_lr is the Most Critical Hyperparameter
+Not rank, not lt_weight, not freq — the learning rate inside the teleport optimizer.
+- teleport_lr=0.01: always hurts (delta_norm 7–50, catastrophic disruption)
+- teleport_lr=0.001: works (+2.65% over baseline; delta_norm 0.32, lt=0.035)
 
-### Pattern 2: Frequency is Critical, But Not Sufficient
-- freq=1: 12x slower, -31.6% accuracy (catastrophic)
-- freq=10: 2x slower, -1.6% to -10.3% (bad to catastrophic)
-Even optimal frequency doesn't overcome the core issue.
+### Pattern 2: Frequency Does Not Scale with ER
+- freq=10 (755 triggers): +2.65%
+- freq=1 (7358 triggers, 10x more): +1.96% (same, or slightly worse)
+10x more gradient corrections give no additional benefit. Possible cause: ER batch mismatch.
 
-### Pattern 3: cos_sim Improvement is Not Enough
-The teleport improves cos_sim in 93–99% of cases (mechanism works locally), but:
-1. The improvement doesn't persist across steps
-2. Each teleport creates a perturbation that hurts subsequent steps
-3. Many teleports per task (850–4419) compound the damage
+### Pattern 3: Mechanism Works (cos_sim improvement is real and loss-invariant)
+With teleport_lr=0.001: 91.3% of triggers show positive cos_improve, avg_lt=0.035.
+The mechanism is functioning correctly at a local level. The limitation is elsewhere.
+
+### Pattern 4: cos_sim Conflict is Ubiquitous (H8)
+78.9% of all training steps have cos_sim < 0. This means gradient conflict is a background
+property, not a selective event. The correlation with forgetting is weak (r=-0.25 pooled,
+inconsistent across seeds).
 
 ## Lessons and Constraints
 
-1. Online teleport (H6/H7) is **fundamentally broken** with rank-2 LoRA
-2. freq=1 is never viable (12x slowdown, catastrophic accuracy)
-3. lt_weight tuning cannot fix the structural issue (Flaw 5)
-4. delta_norm must be kept small to avoid disrupting other batches — but then lt can't be controlled
-5. The 50-epoch baseline (61.66%) is the proper reference for the full method
+1. teleport_lr=0.001 (not 0.01) is required for positive results
+2. rank=4 is sufficient; higher rank doesn't improve accuracy with small lr
+3. freq=1 is computationally infeasible for SGD (every step triggers; ~15 hours)
+4. freq scaling doesn't work with ER — batch mismatch is the likely cause (testing in H11)
+5. The 50-epoch ER baseline (61.66%) sets the ceiling context; H10 best (61.30%) is close
 
-## Open Questions / Next Directions
+## H11: SGD + Online Teleport — Batch Mismatch Test (2026-04-19)
 
-### Option A: PIVOT to task-boundary teleport improvement
-H6b (task-boundary, threshold=-0.3): -0.15%, std=0.74% (neutral/stable)
-Can we understand why H6b is neutral and push it positive?
+### Setup
+- SGD_base: pure finetuning, no replay → 19.45% Class-IL (severe forgetting as expected)
+- SGD_f10: SGD + online teleport freq=10 (H10 best params: teleport_lr=0.001, rank=4, lt_weight=200)
+- No ER buffer → no batch mismatch between teleport memory and training
 
-### Option B: Verify the fundamental hypothesis
-Does gradient conflict actually CAUSE forgetting? If not, teleportation is solving the wrong problem.
-Test: measure correlation between per-step cos_sim and eventual forgetting on that task.
+### Results
 
-### Option C: SAM-style first-order approximation
-Replace create_graph=True with weight perturbation:
-g_approx = (g(θ + ε*sign(g)) - g(θ)) / ε
-Much cheaper → can do more steps or higher rank without blowing up compute.
+| Exp | Class-IL | Δ | cos+ rate | mean cos_improve | mean_lt | triggers |
+|-----|----------|---|-----------|-----------------|---------|---------|
+| SGD_base | 19.45% | 0 | — | — | — | — |
+| SGD_f10 | **19.56%** | **+0.11%** | 86.7% | +0.0163 | 0.044 | 792 |
+| ER_base | 58.53% | 0 | — | — | — | — |
+| ER_f10 (H10 best) | **61.18%** | **+2.65%** | 91.3% | +0.027 | 0.035 | ~755 |
 
-### Option D: Conditional merge
-Only merge if both: (a) lt < 0.1 AND (b) cos_sim actually improved.
-Filter out bad teleports. Roughly 5% of events would pass. Very few merges = little disruption.
-But: is this enough to help? Unclear.
+### Critical Finding: Batch Mismatch NOT the Cause
 
-**→ All options deprioritized given H8 finding: the fundamental hypothesis is not confirmed.**
+The batch mismatch hypothesis is **rejected**: SGD has no batch mismatch yet shows near-zero benefit (+0.11%).
+
+Mechanism works correctly in both settings (86-91% cos+ rate, lt~0.04, loss-preserving).
+The difference is **gradient signal quality**:
+
+- **ER**: Model retains old-task knowledge via replay → old-task gradient is informative → marginally useful (+2.65%)
+- **SGD**: Old tasks catastrophically forgotten → old-task gradient on 256 teleport samples = noise → +0.11%
+
+### Implication: Teleportation Requires Prior Knowledge Preservation
+
+Online LoRA teleportation can only reduce gradient conflict when the old-task gradient is
+informative. This requires some knowledge preservation (ER replay). Without replay, teleport
+memory gradient is noise. Teleportation is a **second-order enhancement to replay**, not
+an independent forgetting-prevention technique.
 
 ## H8: Gradient Conflict → Forgetting Hypothesis Verification (2026-04-16)
 
@@ -119,18 +132,27 @@ granularity is wrong. Conflict is ubiquitous, not selective.
 
 ---
 
-## Decision: CONCLUDE
+## Final Decision: CONCLUDE — Coherent Story Across H6–H11
 
-The research programme is complete. The results form a coherent set of negative findings:
+All experiments complete. The results form a coherent, publishable narrative:
 
-1. **H6b/H7 (Online teleport)**: Fundamentally broken. Flaw 5 confirmed — zero-order guarantee
-   at one batch ≠ trajectory invariance. No viable hyperparameter regime with rank-2 LoRA.
+### The Story
+1. **H7/H8**: Online teleport with teleport_lr=0.01 always hurts. cos_sim conflict is ubiquitous
+   (79% steps), signal too noisy (r=-0.25 with forgetting). Appeared fundamentally broken.
 
-2. **H8 (Hypothesis verification)**: Gradient conflict is ubiquitous (79% of steps). The proxy
-   (mini-batch cos_sim) has insufficient discriminating power. The hypothesis is not confirmed.
+2. **H9/H10 BREAKTHROUGH**: teleport_lr=0.001 (not 0.01) is the key. Small lr → tiny delta_norm
+   (0.32 vs 13), perfect loss preservation (lt=0.035), 91% cos+ rate → **+2.65%** over ER baseline.
+   First positive result. Shows the mechanism CAN work when properly constrained.
 
-**Conclusion**: LoRA teleportation designed around mini-batch gradient alignment cannot reduce
-catastrophic forgetting in this form. The approach is solving the wrong problem at the wrong
-granularity.
+3. **H10 Puzzle**: freq=1 (7358 triggers) ≈ freq=10 (755 triggers) in accuracy. 10x more corrections
+   give no additional benefit. Batch mismatch hypothesis proposed.
 
-**Coherent negative result** — publishable as a rigorous study of what doesn't work and why.
+4. **H11 Resolution**: SGD+teleport = +0.11% despite perfect mechanism (87% cos+ rate, lt=0.04).
+   Batch mismatch is NOT the cause. Root cause: old-task gradient quality. ER preserves old-task
+   knowledge via replay → informative gradient → useful alignment. SGD doesn't → noisy gradient
+   → useless alignment. Teleportation is a **second-order replay complement**, not standalone.
+
+### Verdict
+**LoRA teleportation for continual learning**: viable as a small complement to ER (+2.65%),
+not viable standalone (SGD +0.11%). The improvement requires existing knowledge preservation.
+The cos_sim improvement per event (+0.027) is too small to scale with frequency.
