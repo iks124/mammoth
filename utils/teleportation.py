@@ -721,21 +721,18 @@ def detect_gradient_conflict(net: nn.Module,
                               batch_new: tuple,
                               batch_old: tuple,
                               loss_fn,
-                              device: str = 'cuda',
-                              approx_layers: int = 2) -> float:
+                              device: str = 'cuda') -> float:
     """
-    Fast gradient-conflict detection between current task and old-task memory.
+    Gradient-conflict detection between current task and old-task memory.
 
-    Computes cos_sim(g_new, g_old) using only the last `approx_layers` Conv2d/Linear
-    layers for speed (~10x faster than full network).
+    Computes cos_sim(g_new, g_old) over all Conv2d/Linear weight parameters.
 
     Args:
-        net:           backbone network
-        batch_new:     (x, y) tuple for current task batch (already on device)
-        batch_old:     (x, y) tuple sampled from old-task memory
-        loss_fn:       task loss function
-        device:        torch device
-        approx_layers: number of last layers to use for gradient approximation
+        net:       backbone network
+        batch_new: (x, y) tuple for current task batch (already on device)
+        batch_old: (x, y) tuple sampled from old-task memory
+        loss_fn:   task loss function
+        device:    torch device
 
     Returns:
         cos_sim value (float). Negative means gradient conflict.
@@ -743,14 +740,12 @@ def detect_gradient_conflict(net: nn.Module,
     x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
     x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
 
-    # Identify the last `approx_layers` Conv2d/Linear weight params
-    all_weight_params = []
+    probe_params = []
     for _, module in net.named_modules():
         if isinstance(module, (nn.Linear, nn.Conv2d)):
             for pname, p in module.named_parameters(recurse=False):
                 if 'weight' in pname:
-                    all_weight_params.append(p)
-    probe_params = all_weight_params[-approx_layers:] if len(all_weight_params) >= approx_layers else all_weight_params
+                    probe_params.append(p)
     if not probe_params:
         return 1.0
 
@@ -921,6 +916,54 @@ def teleport_lora_online(net: nn.Module,
     return history
 
 
+@torch.enable_grad()
+def teleport_scaling_online(net: nn.Module,
+                              batch_new: tuple,
+                              batch_old: tuple,
+                              loss_fn,
+                              n_steps: int = 10,
+                              lr_t: float = 0.01,
+                              reg_lambda: float = 0.1,
+                              device: str = 'cuda',
+                              pairs: Optional[List[Dict]] = None) -> dict:
+    """
+    Online ReLU-scaling teleportation for CL — exact loss invariance, no lt penalty.
+
+    Uses the same detection interface as teleport_lora_online but optimises
+    the log(t) scaling factors (ReLU symmetry) instead of LoRA weights.
+    Because scaling is an exact symmetry of the network output, loss invariance
+    is mathematically guaranteed — no lt_weight constraint needed.
+
+    This directly tests whether the lt-cos tradeoff in LoRA is the bottleneck:
+    with no lt constraint, can scaling achieve larger cos_sim improvement?
+    """
+    x_new, y_new = batch_new[0].to(device), batch_new[1].to(device)
+    x_old, y_old = batch_old[0].to(device), batch_old[1].to(device)
+
+    # Wrap single batches as DataLoaders for teleport_for_flat_minimum
+    new_dl = DataLoader(
+        TensorDataset(x_new.cpu(), y_new.cpu()),
+        batch_size=len(x_new), shuffle=False,
+    )
+    old_dl = DataLoader(
+        TensorDataset(x_old.cpu(), y_old.cpu()),
+        batch_size=len(x_old), shuffle=False,
+    )
+
+    history_raw = teleport_for_flat_minimum(
+        net, old_dl, new_dl, loss_fn,
+        n_steps=n_steps, lr_t=lr_t, reg_lambda=reg_lambda,
+        device=device, pairs=pairs,
+    )
+
+    # Normalise to same format as teleport_lora_online for logging compatibility
+    return {
+        'cos_sim': history_raw['cos_sim'],
+        'lt': [0.0] * len(history_raw['cos_sim']),  # exact invariance by construction
+        'delta_norm': history_raw['max_abs_log_t'],  # max |log_t| as proxy for step size
+    }
+
+
 def add_teleportation_args(parser) -> None:
     """Add teleportation-related command-line arguments."""
     group = parser.add_argument_group(
@@ -938,9 +981,10 @@ def add_teleportation_args(parser) -> None:
     group.add_argument('--teleport_memory_per_task', type=int, default=256,
                        help='Samples stored per task for teleportation gradient computation.')
     group.add_argument('--teleport_mode', type=str, default='scaling',
-                       choices=['scaling', 'lora', 'repair', 'online'],
+                       choices=['scaling', 'lora', 'repair', 'online', 'scaling_online'],
                        help='Teleportation mode: "scaling" (ReLU symmetry), "lora" (COST-style), '
-                            '"repair" (post-task LoRA repair), or "online" (mid-training conflict detection).')
+                            '"repair" (post-task LoRA repair), "online" (mid-training LoRA), '
+                            'or "scaling_online" (mid-training exact-invariant scaling).')
     group.add_argument('--teleport_lora_rank', type=int, default=4,
                        help='LoRA rank for COST-style teleportation.')
     group.add_argument('--teleport_gamma', type=float, default=1.0,
@@ -958,8 +1002,6 @@ def add_teleportation_args(parser) -> None:
                        help='[online mode] Trigger teleportation when cos_sim(g_new, g_old) < threshold.')
     group.add_argument('--teleport_lt_weight', type=float, default=1.0,
                        help='[online mode] Weight for L_t (loss invariance) term in online teleportation.')
-    group.add_argument('--teleport_approx_layers', type=int, default=2,
-                       help='[online mode] Number of last layers used for fast gradient conflict detection.')
     group.add_argument('--teleport_detect_only', type=int, default=0, choices=[0, 1],
                        help='[online mode] If 1, only detect gradient conflict (log cos_sim) without teleporting. '
                             'Used for H8 hypothesis verification.')

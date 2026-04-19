@@ -112,7 +112,7 @@ def train_single_epoch(model: ContinualModel,
         # --- Online teleportation (H6): mid-training gradient conflict detection ---
         if (args is not None
                 and getattr(args, 'teleport', 0)
-                and getattr(args, 'teleport_mode', 'scaling') == 'online'
+                and getattr(args, 'teleport_mode', 'scaling') in ('online', 'scaling_online')
                 and hasattr(model, '_teleport_memory')
                 and len(model._teleport_memory.data) >= 2):
             # i is already incremented above at the end of loop body — use model.task_iteration
@@ -149,7 +149,6 @@ def train_single_epoch(model: ContinualModel,
                         batch_old=_old_batch,
                         loss_fn=model.loss,
                         device=model.device,
-                        approx_layers=getattr(args, 'teleport_approx_layers', 2),
                     )
                     threshold = getattr(args, 'teleport_conflict_threshold', 0.0)
                     _n_tasks_now = len(model._teleport_memory.data)
@@ -165,18 +164,32 @@ def train_single_epoch(model: ContinualModel,
                         logging.info(
                             f"[Teleport-Online] Triggered #{_teleport_count} at step={_online_step} cos_sim={cos_val:.4f} < threshold={threshold}"
                         )
-                        teleport_history = teleport_lora_online(
-                            net=model.net,
-                            batch_new=(inputs, labels),
-                            batch_old=_old_batch,
-                            loss_fn=model.loss,
-                            n_steps=getattr(args, 'teleport_online_steps', 5),
-                            lr_lora=getattr(args, 'teleport_lr', 1e-3),
-                            reg_lambda=getattr(args, 'teleport_reg', 0.01),
-                            lt_weight=getattr(args, 'teleport_lt_weight', 1.0),
-                            lora_rank=getattr(args, 'teleport_lora_rank', 2),
-                            device=model.device,
-                        )
+                        _tmode = getattr(args, 'teleport_mode', 'online')
+                        if _tmode == 'scaling_online':
+                            from utils.teleportation import teleport_scaling_online
+                            teleport_history = teleport_scaling_online(
+                                net=model.net,
+                                batch_new=(inputs, labels),
+                                batch_old=_old_batch,
+                                loss_fn=model.loss,
+                                n_steps=getattr(args, 'teleport_online_steps', 5),
+                                lr_t=getattr(args, 'teleport_lr', 0.01),
+                                reg_lambda=getattr(args, 'teleport_reg', 0.1),
+                                device=model.device,
+                            )
+                        else:  # 'online' — LoRA
+                            teleport_history = teleport_lora_online(
+                                net=model.net,
+                                batch_new=(inputs, labels),
+                                batch_old=_old_batch,
+                                loss_fn=model.loss,
+                                n_steps=getattr(args, 'teleport_online_steps', 5),
+                                lr_lora=getattr(args, 'teleport_lr', 1e-3),
+                                reg_lambda=getattr(args, 'teleport_reg', 0.01),
+                                lt_weight=getattr(args, 'teleport_lt_weight', 1.0),
+                                lora_rank=getattr(args, 'teleport_lora_rank', 2),
+                                device=model.device,
+                            )
                         if teleport_history['cos_sim']:
                             final_cos = teleport_history['cos_sim'][-1]
                             final_lt = teleport_history['lt'][-1]
